@@ -34,7 +34,9 @@ permissions:
 jobs:
   build:
     name: Build IPA
-    runs-on: macos-14
+    # macos-14 is arm64-only now; macos-15 is the Intel image that carries
+    # Xcode 15.4 and the simulator runtimes we need.
+    runs-on: macos-15
     env:
       # The workflow_dispatch input is restricted to a choice list and is passed
       # through env (never interpolated directly into a run: command).
@@ -48,7 +50,14 @@ jobs:
 
       - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app
+          set -euo pipefail
+          # Pick the newest Xcode that is actually installed on this image.
+          for candidate in $(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -r); do
+            if sudo xcode-select -s "$candidate" 2>/dev/null; then
+              echo "Using $candidate"
+              break
+            fi
+          done
           xcodebuild -version
 
       - name: Show runner details
