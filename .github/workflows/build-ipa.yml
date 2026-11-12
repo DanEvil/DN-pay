@@ -1,0 +1,229 @@
+name: Build IPA
+
+# Builds MirWallet as an .ipa on a macOS runner.
+#
+# Two output modes:
+#   * default          -> unsigned IPA, installable via Sideloadly / AltStore
+#                         (they re-sign with your own Apple ID on the device)
+#   * signed           -> real IPA signed with the certificate + provisioning
+#                         profile supplied as repository secrets
+#
+# Neither mode can grant com.apple.developer.nfc.hce — see README.md.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        type: choice
+        options: [Release, Debug]
+        default: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build IPA
+    runs-on: macos-14
+    env:
+      # The workflow_dispatch input is restricted to a choice list and is passed
+      # through env (never interpolated directly into a run: command).
+      CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
+      PROJECT_DIR: ios
+      SCHEME: MirWallet
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app
+          xcodebuild -version
+
+      - name: Show runner details
+        run: |
+          echo "macOS: $(sw_vers -productVersion)"
+          echo "Xcode: $(xcodebuild -version | head -1)"
+          python3 --version
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          xcodegen generate --spec project.yml
+          ls -la
+
+      - name: Detect signing material
+        id: signing
+        env:
+          CERT: ${{ secrets.CERT_P12_BASE64 }}
+          PROFILE: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          # Secrets are optional. Without them we produce an unsigned IPA that
+          # Sideloadly / AltStore will re-sign on the device.
+          if [ -n "$CERT" ] && [ -n "$PROFILE" ]; then
+            echo "has_cert=true" >> "$GITHUB_OUTPUT"
+            echo "Signing material present -> signed IPA."
+          else
+            echo "has_cert=false" >> "$GITHUB_OUTPUT"
+            echo "No signing secrets -> unsigned IPA (Sideloadly/AltStore path)."
+          fi
+
+      - name: Import certificate
+        if: steps.signing.outputs.has_cert == 'true'
+        env:
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p actions "$RUNNER_TEMP/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p actions "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/build.keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k actions "$RUNNER_TEMP/build.keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Install provisioning profile
+        if: steps.signing.outputs.has_cert == 'true'
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROVISIONING_PROFILE_BASE64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/MirWallet.mobileprovision"
+
+      - name: Resolve team id
+        if: steps.signing.outputs.has_cert == 'true'
+        id: team
+        run: |
+          set -euo pipefail
+          PROFILE="$HOME/Library/MobileDevice/Provisioning Profiles/MirWallet.mobileprovision"
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
+          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$RUNNER_TEMP/profile.plist")
+          echo "team_id=$TEAM" >> "$GITHUB_OUTPUT"
+          echo "profile=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Team: $TEAM, profile: $NAME"
+
+      - name: Archive
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          TEAM_ID: ${{ steps.team.outputs.team_id }}
+          HAS_CERT: ${{ steps.signing.outputs.has_cert }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/MirWallet.xcarchive"
+
+          if [ "$HAS_CERT" = "true" ]; then
+            xcodebuild archive \
+              -project MirWallet.xcodeproj \
+              -scheme "$SCHEME" \
+              -configuration "$CONFIGURATION" \
+              -destination "generic/platform=iOS" \
+              -archivePath "$ARCHIVE" \
+              -allowProvisioningUpdates \
+              DEVELOPMENT_TEAM="$TEAM_ID" \
+              CODE_SIGN_STYLE=Manual \
+              PROVISIONING_PROFILE_SPECIFIER=MirWallet
+          else
+            # Unsigned: CODE_SIGNING_ALLOWED=NO keeps the build green without
+            # any Apple account. Sideloadly / AltStore will sign it locally.
+            xcodebuild archive \
+              -project MirWallet.xcodeproj \
+              -scheme "$SCHEME" \
+              -configuration "$CONFIGURATION" \
+              -destination "generic/platform=iOS" \
+              -archivePath "$ARCHIVE" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+          fi
+
+          test -d "$ARCHIVE"
+
+      - name: Export IPA
+        env:
+          HAS_CERT: ${{ steps.signing.outputs.has_cert }}
+          TEAM_ID: ${{ steps.team.outputs.team_id }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/MirWallet.xcarchive"
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+
+          if [ "$HAS_CERT" = "true" ]; then
+            cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>development</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.dnpay.mirwallet</key><string>MirWallet</string>
+            </dict>
+            <key>compileBitcode</key><false/>
+          </dict>
+          </plist>
+          PLIST
+            xcodebuild -exportArchive \
+              -archivePath "$ARCHIVE" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath "$EXPORT_DIR"
+          else
+            # Package the unsigned .app into an .ipa by hand.
+            APP_PATH=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+            echo "App: $APP_PATH"
+            mkdir -p "$EXPORT_DIR/Payload"
+            cp -R "$APP_PATH" "$EXPORT_DIR/Payload/"
+            (cd "$EXPORT_DIR" && zip -qry "$GITHUB_WORKSPACE/MirWallet.ipa" Payload)
+          fi
+
+          ls -la "$GITHUB_WORKSPACE"/*.ipa
+
+      - name: Run unit tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project MirWallet.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MirWallet-ipa
+          path: MirWallet.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MirWallet.ipa
+          generate_release_notes: true

@@ -1,0 +1,28 @@
+# Secrets
+server/master.key
+server/*.key
+
+# Build artefacts
+MirWallet.ipa
+build/
+DerivedData/
+*.xcarchive
+*.xcodeproj
+ios/MirWallet.xcodeproj/
+
+# XcodeGen output is generated, not committed
+ios/project.pbxproj
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors
+.vscode/
+.idea/
+*.swp

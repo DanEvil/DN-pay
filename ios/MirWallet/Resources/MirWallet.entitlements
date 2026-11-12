@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Entitlements intentionally limited to what a FREE Apple Account can sign.
+
+	  com.apple.developer.nfc.hce is NOT included on purpose: Apple grants it
+	  only to EEA-established applicants with a payments licence, and a free
+	  provisioning profile does not contain it. Including it would make every
+	  Sideloadly/AltStore install fail with 0xE8008016 ("invalid entitlements")
+	  or kill the app at launch via fatalError in CardSession.init().
+
+	  The app detects this at runtime and reports the exact blocking gate in
+	  the NFC tab. See README.md -> "Что невозможно и почему".
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.dnpay.mirwallet</string>
+	</array>
+</dict>
+</plist>

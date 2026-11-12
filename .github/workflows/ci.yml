@@ -1,0 +1,75 @@
+name: CI
+
+# Verifies the mock TSP / issuer simulator on every push.
+# The iOS build lives in build-ipa.yml (it needs a macOS runner).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server-tests:
+    name: Mock TSP tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run test suite
+        working-directory: server
+        run: python3 test_mock_tsp.py
+
+      - name: Check Swift/Python parity
+        run: python3 tools/parity_check.py
+
+  lint:
+    name: Syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        run: python3 -m compileall -q server
+
+      - name: Validate project spec
+        run: |
+          python3 - <<'PY'
+          import sys
+          try:
+              import yaml
+          except ImportError:
+              print("PyYAML not installed, skipping YAML parse")
+              sys.exit(0)
+          for path in ("ios/project.yml", ".github/workflows/build-ipa.yml", ".github/workflows/ci.yml"):
+              with open(path, encoding="utf-8") as fh:
+                  yaml.safe_load(fh)
+              print("ok:", path)
+          PY
+
+      - name: Validate plists
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          for path in ("ios/MirWallet/Resources/Info.plist",
+                       "ios/MirWallet/Resources/MirWallet.entitlements"):
+              with open(path, "rb") as fh:
+                  plistlib.load(fh)
+              print("ok:", path)
+          PY
