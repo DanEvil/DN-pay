@@ -94,9 +94,26 @@ extension Data {
         map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Parses a hex string into bytes.
+    ///
+    /// NOTE: this must not call `Data(hexString:)` — that would recurse into
+    /// this very initialiser and blow the stack. Foundation has no base16
+    /// decoder, so the bytes are parsed by hand.
     init?(hexString: String) {
         let cleaned = hexString.replacingOccurrences(of: " ", with: "")
-        guard cleaned.count % 2 == 0, let data = Data(hexString: cleaned) else { return nil }
-        self = data
+        guard cleaned.count % 2 == 0 else { return nil }
+
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(cleaned.count / 2)
+
+        var index = cleaned.startIndex
+        while index < cleaned.endIndex {
+            let next = cleaned.index(index, offsetBy: 2)
+            guard let byte = UInt8(cleaned[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+
+        self = Data(bytes)
     }
 }

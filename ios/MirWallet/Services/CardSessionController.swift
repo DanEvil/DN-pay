@@ -117,7 +117,7 @@ final class CardSessionController: NSObject, ObservableObject {
     /// Returns false and populates `gate` when Apple blocks the session.
     @discardableResult
     func startEmulation(aids: [String]) async -> Bool {
-        await evaluateGate()
+        _ = await evaluateGate()
 
         #if targetEnvironment(simulator)
         appendLog("Симулятор: CardSession недоступен")
@@ -182,6 +182,9 @@ final class CardSessionController: NSObject, ObservableObject {
                 case .sessionInvalidated(let reason):
                     appendLog("Сессия инвалидирована: \(reason)")
                     isEmulating = false
+
+                @unknown default:
+                    appendLog("Неизвестное событие сессии")
                 }
             }
         } catch {
@@ -212,7 +215,7 @@ final class CardSessionController: NSObject, ObservableObject {
                 return status(Self.swFileNotFound)
             }
             let aidBytes = Data(hexString: aid) ?? Data()
-            var body = Data([0x84, UInt8(aidBytes.count)]) + aidBytes
+            let body = Data([0x84, UInt8(aidBytes.count)]) + aidBytes
             var fci = Data([0x6F, UInt8(body.count)]) + body
             fci.append(contentsOf: status(Self.swSuccess))
             return fci
