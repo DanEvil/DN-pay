@@ -228,7 +228,7 @@ final class CardSessionController: NSObject, ObservableObject {
     }
 
     private func status(_ sw: UInt16) -> Data {
-        Data([UInt8(sw >> 8), UInt8(sw & 0xFF)])
+        Data([UInt8(truncatingIfNeeded: sw >> 8), UInt8(truncatingIfNeeded: sw & 0xFF)])
     }
 
     private func appendLog(_ message: String) {

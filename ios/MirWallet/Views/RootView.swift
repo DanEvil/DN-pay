@@ -216,10 +216,10 @@ struct LogView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    if payment.log.isEmpty {
+                    if payment.journal.isEmpty {
                         Text("Журнал пуст").foregroundStyle(.secondary)
                     }
-                    ForEach(Array(payment.log.enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(payment.journal.enumerated()), id: \.offset) { _, line in
                         Text(line)
                             .font(.caption.monospaced())
                             .frame(maxWidth: .infinity, alignment: .leading)

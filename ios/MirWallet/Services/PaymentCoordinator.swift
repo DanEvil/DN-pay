@@ -40,7 +40,7 @@ final class PaymentCoordinator: ObservableObject {
     }
 
     @Published private(set) var stage: Stage = .idle
-    @Published private(set) var log: [String] = []
+    @Published private(set) var journal: [String] = []
     @Published private(set) var tokenId: String?
     @Published private(set) var dpan: String?
     @Published private(set) var last4: String?
@@ -118,7 +118,7 @@ final class PaymentCoordinator: ObservableObject {
     func runTransaction() async {
         guard !isBusy else { return }
         isBusy = true
-        log.removeAll()
+        journal.removeAll()
         stage = .checking
         defer { isBusy = false }
 
@@ -127,12 +127,12 @@ final class PaymentCoordinator: ObservableObject {
             let check = try await tsp.checkCard(pan: pan, cvv: cvv, expiry: expiry)
             guard check.approved else {
                 stage = .declined
-                log("Карта отклонена: \(check.reason ?? "unknown")")
+                appendLog("Карта отклонена: \(check.reason ?? "unknown")")
                 return
             }
             last4 = check.last4
             try? keychain.setString(check.last4 ?? "", for: KeychainStore.Key.last4)
-            log("Карта проверена: \(check.scheme ?? "?") ***\(last4 ?? "")")
+            appendLog("Карта проверена: \(check.scheme ?? "?") ***\(last4 ?? "")")
 
             // 2. Provision
             stage = .provisioning
@@ -143,7 +143,7 @@ final class PaymentCoordinator: ObservableObject {
             keysExpireAt = Date(timeIntervalSince1970: provisioning.keysExpireAt)
             guard let key = Data(base64Encoded: provisioning.sessionKey) else {
                 stage = .failed
-                log("Не удалось декодировать session key")
+                appendLog("Не удалось декодировать session key")
                 return
             }
             sessionKey = key
@@ -152,8 +152,8 @@ final class PaymentCoordinator: ObservableObject {
             try? keychain.setString(provisioning.dpan, for: KeychainStore.Key.dpan)
             try? keychain.setString(String(provisioning.atc), for: KeychainStore.Key.atc)
             try? keychain.setString(String(provisioning.keysExpireAt), for: KeychainStore.Key.keysExpireAt)
-            log("Токен выпущен: \(provisioning.tokenId), DPAN \(provisioning.dpan)")
-            log("Ключи действительны \(keysRemainingDescription)")
+            appendLog("Токен выпущен: \(provisioning.tokenId), DPAN \(provisioning.dpan)")
+            appendLog("Ключи действительны \(keysRemainingDescription)")
 
             // 3. Authorize
             stage = .authorizing
@@ -181,17 +181,17 @@ final class PaymentCoordinator: ObservableObject {
 
             if verification.approved {
                 stage = .approved
-                log("Криптограмма принята. ATC=\(atc), ARQC=\(arqc.hexString)")
+                appendLog("Криптограмма принята. ATC=\(atc), ARQC=\(arqc.hexString)")
             } else {
                 stage = .declined
-                log("Отклонено: \(verification.reason ?? "unknown")")
+                appendLog("Отклонено: \(verification.reason ?? "unknown")")
                 if verification.reconnectRequired == true {
-                    log("Нужно переподключиться к TSP для обновления ключей")
+                    appendLog("Нужно переподключиться к TSP для обновления ключей")
                 }
             }
         } catch {
             stage = .failed
-            log("Ошибка: \(error.localizedDescription)")
+            appendLog("Ошибка: \(error.localizedDescription)")
         }
     }
 
@@ -240,6 +240,6 @@ final class PaymentCoordinator: ObservableObject {
     }
 
     func appendLog(_ message: String) {
-        log.append(message)
+        journal.append(message)
     }
 }
