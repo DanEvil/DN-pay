@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # Installs the unsigned MirWallet IPA on a connected iPhone using AltStore / AltServer.
 #
-# Requirements (Windows):
-#   * iTunes 64-bit from apple.com (NOT the Microsoft Store build)
-#   * AltServer for Windows from https://altstore.io
-#   * iPhone connected via USB, unlocked, "Trust this computer" confirmed
-#   * Developer Mode enabled on the device (Settings -> Privacy & Security -> Developer Mode)
+# AltServer lives next to this script and was extracted from the official
+# AltStore installer (altinstaller.zip -> AltInstaller.msi -> AltServer.exe
+# version 1.8.4.0). Apple Mobile Device Support is already installed on this
+# machine, so no extra setup is needed.
 #
-# AltServer can install a plain .ipa directly (hold Shift while clicking the
-# tray icon -> "Sideload .ipa..."), which is what this script automates when
-# the AltServer binary is on PATH.
+# AltServer is a tray application. Hold Shift while clicking its tray icon
+# and pick "Sideload .ipa...".
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IPA="${1:-$HERE/../MirWallet.ipa}"
-ALTSERVER="${ALTSERVER:-/c/Program Files (x86)/AltStore/AltServer.exe}"
+ALTSERVER="${ALTSERVER:-$HERE/../tools/AltServer/AltServer.exe}"
 
 if [ ! -f "$IPA" ]; then
   echo "IPA not found: $IPA" >&2
@@ -32,21 +30,15 @@ echo "Installing: $IPA"
 echo "AltServer:   $ALTSERVER"
 echo
 
-# AltServer on Windows exposes the sideload action through the tray menu.
-# The documented unattended switch is available in recent builds; fall back to
-# the GUI instructions otherwise.
-if "$ALTSERVER" --sideload "$IPA" 2>/dev/null; then
-  echo "AltServer reported success."
-  exit 0
-fi
+echo "Starting AltServer (look for the diamond icon in the system tray)."
+echo "Then hold Shift and click the tray icon -> 'Sideload .ipa...' -> pick $IPA"
+echo
+
+"$ALTSERVER" &
+sleep 3
 
 cat <<'EOF'
-AltServer did not accept the unattended switch on this machine. Install manually:
-
-  1. Connect and unlock the iPhone over USB.
-  2. Start AltServer (tray icon).
-  3. Hold Shift while clicking the tray icon -> "Sideload .ipa...".
-  4. Choose the .ipa, pick the device, enter your Apple ID, press Start.
-
 AltStore Classic requires iOS 17.4+ on the device.
+For an AltStore-typed install, AltServer must stay running and the iPhone
+must be on the same Wi-Fi, or connected by USB.
 EOF

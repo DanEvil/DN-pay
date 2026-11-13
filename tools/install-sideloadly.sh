@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Installs the unsigned MirWallet IPA on a connected iPhone using Sideloadly.
 #
-# Requirements (Windows):
-#   * iTunes 64-bit from apple.com (NOT the Microsoft Store build)
-#   * Sideloadly from https://sideloadly.io
-#   * iPhone connected via USB, unlocked, "Trust this computer" confirmed
+# This machine already has:
+#   * iTunes 64-bit (C:/Program Files/iTunes/iTunes.exe)
+#   * Apple Mobile Device Support + running "Apple Mobile Device Service"
+#   * Sideloadly at C:/Users/nenas/AppData/Local/Sideloadly/sideloadly.exe
 #
-# On macOS / Linux use ./install-altstore.sh instead.
+# Sideloadly is a GUI-only app (Go + Qt): it has no documented unattended CLI.
+# It opens with the IPA preloaded; you pick the device and sign in.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IPA="${1:-$HERE/../MirWallet.ipa}"
-SIDELOADLY="${SIDELOADLY:-/c/Program Files/Sideloadly/Sideloadly.exe}"
+SIDELOADLY="${SIDELOADLY:-/c/Users/nenas/AppData/Local/Sideloadly/sideloadly.exe}"
 
 if [ ! -f "$IPA" ]; then
   echo "IPA not found: $IPA" >&2
@@ -21,23 +22,43 @@ fi
 
 if [ ! -f "$SIDELOADLY" ]; then
   echo "Sideloadly not found at: $SIDELOADLY" >&2
-  echo "Download it from https://sideloadly.io and set SIDELOADLY=/path/to/Sideloadly.exe" >&2
+  echo "Install it from https://sideloadly.io (Windows installer, installs to %LOCALAPPDATA%\\Sideloadly)." >&2
   exit 1
 fi
 
 echo "Installing: $IPA"
 echo "Sideloadly:  $SIDELOADLY"
 echo
-echo "Sideloadly is interactive: drag the IPA onto the window, choose your device,"
-echo "enter your Apple ID, press Start. This script only verifies the inputs."
+echo "In the window: pick your device, enter your Apple ID, press Start."
+echo "Free Apple ID -> the app expires after 7 days; paid Apple ID -> 1 year."
 echo
 
-# Sideloadly has no documented unattended CLI on Windows; verify what we can.
-for required in "/c/Program Files/iTunes/iTunes.exe" "/c/Program Files (x86)/Apple/Mobile Device Support/AppleMobileDeviceService.exe"; do
-  if [ ! -e "$required" ]; then
-    echo "WARNING: expected Apple component missing: $required" >&2
-    echo "         Install iTunes 64-bit from apple.com and enable Apple Mobile Device Support." >&2
-  fi
-done
+# iTunes 64-bit from apple.com, not the Microsoft Store build.
+if [ ! -e "/c/Program Files/iTunes/iTunes.exe" ]; then
+  echo "WARNING: iTunes not found at 'C:/Program Files/iTunes/iTunes.exe'." >&2
+  echo "         Sideloadly needs the 64-bit iTunes from apple.com (not the MS Store build)." >&2
+fi
+
+# Report whether an iPhone is currently visible over USB.
+if [ -x "$LOCALAPPDATA/hermes/cache/scratch/pmd3env/Scripts/python.exe" ]; then
+  "$LOCALAPPDATA/hermes/cache/scratch/pmd3env/Scripts/python.exe" -c "
+import asyncio
+try:
+    from pymobiledevice3.usbmux import list_devices
+except Exception:
+    raise SystemExit(0)
+async def main():
+    try:
+        devices = await list_devices()
+    except Exception:
+        devices = []
+    print('Connected USB devices: %d' % len(devices))
+    for d in devices:
+        print('  ', d)
+    if not devices:
+        print('  -> Connect and unlock the iPhone over USB, then confirm Trust this computer.')
+asyncio.run(main())
+" || true
+fi
 
 exec "$SIDELOADLY" "$IPA"
