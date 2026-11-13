@@ -32,7 +32,7 @@ MirHCE/
 │   │   └── Resources/
 │   │       ├── Info.plist
 │   │       └── MirWallet.entitlements
-│   └── MirWalletTests/      # 7 unit-тестов, включая вектор RFC 5869
+│   └── MirWalletTests/      # 9 unit-тестов, включая вектор RFC 5869
 ├── tools/
 │   ├── run_tsp.py           # запуск mock TSP
 │   ├── install-sideloadly.sh
@@ -177,6 +177,94 @@ iPhone разблокирован, включён Developer Mode.
 Криптография здесь — **мок-режим** (HKDF-SHA256 + HMAC-SHA256), согласованный
 между Swift и Python. Это не схема «Мир» и не схема Apple. Токен, выпущенный
 mock TSP, принимает только mock TSP.
+
+## Разбор SDK Яндекс.Кассы (yandex-checkout-payments-swift)
+
+Репозиторий [`artemnovichkov/yandex-checkout-payments-swift`](https://github.com/artemnovichkov/yandex-checkout-payments-swift)
+(форк `yandex-money`, upstream переехал в `yoomoney/yookassa-payments-swift`)
+изучен построчно: `ApplePayServiceImpl`, `ApplePayContractInteractor`,
+`ApplePayContractPresenter`, `TokenizationModuleInputData`, `CardService`,
+`Tokens`, `PaymentServiceImpl`.
+
+**Что это за SDK.** Мобильный SDK для **приёма** платежей в вашем приложении
+(эквайринг), дополнение к API Яндекс.Кассы. Он выпускает `payment_token`,
+который вы отправляете на свой бэкенд и создаёте платёж через API.
+
+**Почему он не решает задачу «платить своей картой в магазине РФ».**
+
+| | SDK ЮKassa | Задача |
+|---|---|---|
+| Сторона | продавец (эквайринг) | плательщик (NFC-оплата) |
+| Роль | выпускает токен для приёма платежа | эмитует криптограмму для терминала |
+| Транспорт | HTTP к API ЮKassa | NFC (ISO 7816 / EMV) |
+| Apple Pay в нём | `PKPaymentAuthorizationController` → токен продавцу | `CardSession` → APDU терминалу |
+| Ключи | серверные, у продавца | в Secure Element телефона |
+
+Конкретно по Apple Pay в SDK:
+
+- `ApplePayServiceImpl` строит `PKPaymentRequest`, настраивает
+  `merchantIdentifier` / `countryCode` / `currencyCode` / `supportedNetworks`,
+  вызывает `PKPaymentAuthorizationController.present`;
+- `ApplePayContractInteractor` шифрует `paymentData` сертификатом продавца
+  (тот самый `.csr`-обмен с Apple, который описан в инструкции Яндекс.Кассы);
+- `ApplePayContractPresenter` по завершении отдаёт `Tokens`
+  (`paymentToken` + `type`) — их и надо передать в `payment_token` при создании
+  платежа;
+- сеть `mir` в `PKPaymentNetwork` доступна с **iOS 14.5+**, но это сеть
+  **эквайера**: терминал в РФ должен быть настроен на приём Apple Pay от
+  этого продавца, а не «любая карта «Мир» в телефоне».
+
+Полезное из SDK для нашего стенда:
+
+- **Test mode** (`TestModeSettings`) — ровно тот же приём, что делает наш
+  `mock_tsp.py`: сервер не вызывается, ответ имитируется;
+- **3-D Secure** (`start3dsProcess(requestUrl:)`) — схема «клиент держит модуль
+  открытым, пока сервер не подтвердит»;
+- ** сканирование карт** (`CardScannerProvider` / CardIO) — отдельный SDK.
+
+Но **`TokenizationModuleInputData` требует ключ для клиентских приложений** из
+кабинета Яндекс.Кассы и `TrustDefender.framework`, который выдаёт менеджер
+ЮKassa. Без подключённого магазина это не запускается.
+
+**Вывод:** это эталон merchant-side реализации Apple Pay. Как образец —
+прекрасный (структура модулей, обработка ошибок, test mode, логирование).
+Как решение задачи «платить в магазинах РФ своей картой «Мир» через NFC» —
+нет: у SDK нет ни HCE, ни `CardSession`, ни эмитентской стороны.
+
+## iPhone 13 mini и iOS 27.2
+
+Целевая конфигурация заявлена как iPhone 13 mini / iOS 27.2 — приложение
+собрано под `MinimumOSVersion 17.4` и `arm64`, поэтому ставится и работает на
+любом iPhone XS+ с iOS 17.4 и выше, включая 13 mini.
+
+Что стоит знать:
+
+- **Сборка** идёт на iOS SDK 26.2 / Xcode 26.3, `MinimumOSVersion = 17.4`,
+  `UIRequiredDeviceCapabilities = [arm64]` — совместимо с 13 mini;
+- **Транзакционный контур** (TSP + криптограмма) — обычный HTTP + CryptoKit,
+  версия iOS ни на что не влияет, работает офлайн по локальной сети;
+- **HCE-путь** (`CardSession`) требует iOS 17.4+ и, помимо версии, —
+  энтитлмента Apple, которого вне ЕЭЗ не существует (см. раздел выше);
+- **Apple ID** для установки: бесплатный — 7 дней с переподписью, платный — 1 год;
+- устройство должно быть в **Developer Mode** (Настройки → Конфиденциальность →
+  Режим разработчика).
+
+## Сборка и CI
+
+| Workflow | Что делает | Статус |
+|---|---|---|
+| `ci.yml` | тесты mock TSP (16), cross-language parity Swift↔Python, валидация plist/YAML | зелёный |
+| `build-ipa.yml` | XcodeGen → xcodebuild archive → export → unit-тесты → артефакт `MirWallet-ipa` | зелёный |
+
+Артефакт IPA (~98 КБ) лежит в каждом успешном ране **Build IPA**:
+`Actions → Build IPA → Artifacts → MirWallet-ipa`.
+
+Подписанный IPA собирается автоматически, если задать secrets
+`CERT_P12_BASE64` и `PROVISIONING_PROFILE_BASE64`; без них собирается
+unsigned-вариант, который Sideloadly/AltStore переподписывают локально.
+
+Раннер — `macos-15` с авто-выбором установленного Xcode (`macos-14` сейчас
+arm64-only и не принимает x86_64 job-метку).
 
 ## AID карт «Мир»
 
