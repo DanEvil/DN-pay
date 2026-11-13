@@ -212,8 +212,8 @@ final class CardSessionController: NSObject, ObservableObject {
                 return status(Self.swFileNotFound)
             }
             let aidBytes = Data(hexString: aid) ?? Data()
-            var body = Data([0x84, aidBytes.count]) + aidBytes
-            var fci = Data([0x6F, body.count]) + body
+            var body = Data([0x84, UInt8(aidBytes.count)]) + aidBytes
+            var fci = Data([0x6F, UInt8(body.count)]) + body
             fci.append(contentsOf: status(Self.swSuccess))
             return fci
         }
