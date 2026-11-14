@@ -16,9 +16,6 @@ struct RootView: View {
             PaymentView()
                 .tabItem { Label("Оплата", systemImage: "creditcard") }
 
-            TspSettingsView()
-                .tabItem { Label("TSP", systemImage: "server.rack") }
-
             HceView()
                 .tabItem { Label("NFC", systemImage: "wave.3.right") }
 
@@ -99,99 +96,7 @@ struct PaymentView: View {
     }
 }
 
-// MARK: - TSP settings
-
-struct TspSettingsView: View {
-    @EnvironmentObject private var payment: PaymentCoordinator
-    @State private var urlText: String = ""
-    @State private var health: String = "—"
-
-    private var tsp: TspClient { TspClient.shared }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Режим TSP") {
-                    Picker("Источник", selection: Binding(
-                        get: { tsp.mode },
-                        set: { tsp.setMode($0) }
-                    )) {
-                        ForEach(TspClient.Mode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Text(tsp.mode.detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                if tsp.mode == .external {
-                    Section("Адрес TSP") {
-                        TextField("http://192.168.x.x:8787", text: $urlText)
-                            .keyboardType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Button("Сохранить") {
-                            tsp.updateBaseURL(urlText)
-                            health = "…"
-                        }
-                    }
-                }
-
-                Section {
-                    Button("Проверить") {
-                        Task { await checkHealth() }
-                    }
-                }
-
-                Section {
-                    Text(health)
-                        .font(.footnote.monospaced())
-                        .foregroundStyle(.secondary)
-                    if let error = tsp.embeddedError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("Состояние")
-                } footer: {
-                    Text(tsp.mode == .embedded
-                         ? "Встроенный TSP поднят на 127.0.0.1 — доступен только с самого телефона."
-                         : "Локальный mock TSP запускается командой: python3 server/mock_tsp.py")
-                }
-            }
-            .navigationTitle("TSP")
-            .onAppear {
-                urlText = tsp.baseURL.absoluteString
-                if tsp.mode == .embedded {
-                    _ = tsp.startEmbeddedServer()
-                }
-            }
-        }
-    }
-
-    private func checkHealth() async {
-        var url = tsp.embeddedServer?.baseURL ?? URL(string: "http://127.0.0.1:8787")!
-        if tsp.mode == .embedded {
-            _ = tsp.startEmbeddedServer()
-            url = tsp.embeddedServer?.baseURL ?? url
-        } else if let parsed = URL(string: urlText) {
-            url = parsed
-        } else {
-            health = "неверный URL"
-            return
-        }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url.appendingPathComponent("/tsp/health"))
-            health = String(data: data, encoding: .utf8) ?? "—"
-        } catch {
-            health = "недоступен: \(error.localizedDescription)"
-        }
-    }
-}
+// MARK: - HCE
 
 // MARK: - HCE
 
@@ -206,6 +111,25 @@ struct HceView: View {
                     Text(hce.gate.detail)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Диагностика") {
+                    LabeledContent("Модель", value: hce.capabilities.model.isEmpty ? "—" : hce.capabilities.model)
+                    LabeledContent("NFC-модуль", value: hce.capabilities.hardware.title)
+                    LabeledContent("readingAvailable", value: hce.capabilities.readingAvailable.map { $0 ? "true" : "false" } ?? "—")
+                    LabeledContent("CardSession.isSupported", value: hce.capabilities.cardSessionSupported.map { $0 ? "true" : "false" } ?? "—")
+                    LabeledContent("CardSession.isEligible", value: hce.capabilities.cardSessionEligible.map { $0 ? "true" : "false" } ?? "—")
+                    LabeledContent("Профиль подписи", value: hce.capabilities.profileFound ? "найден" : "не найден")
+                    LabeledContent("Энтитлмент HCE", value: hce.capabilities.hasHCE ? "есть" : "нет")
+                }
+
+                if !hce.capabilities.entitlementKeys.isEmpty {
+                    Section("Энтитлменты профиля") {
+                        ForEach(hce.capabilities.entitlementKeys, id: \.self) { key in
+                            Text(key)
+                                .font(.caption.monospaced())
+                        }
+                    }
                 }
 
                 Section {

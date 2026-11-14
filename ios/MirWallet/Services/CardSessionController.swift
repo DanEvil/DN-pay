@@ -33,7 +33,7 @@ import UIKit
 
 enum HceGate: String {
     case ready
-    case deviceUnsupported
+    case hardwareMissing
     case entitlementMissing
     case notEligible
     case simulator
@@ -41,8 +41,8 @@ enum HceGate: String {
     var title: String {
         switch self {
         case .ready: return "HCE доступен"
-        case .deviceUnsupported: return "Устройство не поддерживает NFC"
-        case .entitlementMissing: return "Нет энтитлмента com.apple.developer.nfc.hce"
+        case .hardwareMissing: return "В этом устройстве нет NFC-модуля"
+        case .entitlementMissing: return "Нет прав на HCE (энтитлмент Apple)"
         case .notEligible: return "Не выполняются условия ЕЭЗ"
         case .simulator: return "Симулятор: NFC недоступен"
         }
@@ -52,10 +52,10 @@ enum HceGate: String {
         switch self {
         case .ready:
             return "CardSession доступен, можно эмулировать карту."
-        case .deviceUnsupported:
-            return "NFCReaderSession.readingAvailable == false. Нужен iPhone XS или новее."
+        case .hardwareMissing:
+            return "В этом iPhone нет NFC-модуля. Первый iPhone с NFC — XS."
         case .entitlementMissing:
-            return "Apple выдаёт этот энтитлмент только организациям из ЕЭЗ с лицензией на платёжные услуги. Sideloadly/AltStore его не дают — профиль не содержит capability, поэтому CardSession.init() завершит приложение fatalError."
+            return "NFC-модуль в устройстве есть, но приложение не имеет права им пользоваться: в профиле подписи нет энтитлмента com.apple.developer.nfc.hce. Apple выдаёт его только организациям из ЕЭЗ с лицензией на платёжные услуги, поэтому Sideloadly и AltStore его не дают — бесплатный профиль просто не содержит capability. Без него CardSession.init() завершит приложение fatalError."
         case .notEligible:
             return "Требуется Apple ID из ЕЭЗ и физическое нахождение устройства в ЕЭЗ. VPN и подмена геолокации не помогают."
         case .simulator:
@@ -69,10 +69,13 @@ enum HceGate: String {
 @MainActor
 final class CardSessionController: NSObject, ObservableObject {
 
-    @Published private(set) var gate: HceGate = .deviceUnsupported
+    @Published private(set) var gate: HceGate = .hardwareMissing
     @Published private(set) var isEmulating = false
     @Published private(set) var log: [String] = []
     @Published private(set) var lastTerminalResponse: Data?
+
+    /// Raw NFC facts, shown in the NFC tab so the verdict is verifiable.
+    @Published private(set) var capabilities: NfcCapabilities.Snapshot = NfcCapabilities.Snapshot()
 
     /// Emulator status words per ISO 7816-4.
     private static let swSuccess: UInt16 = 0x9000
@@ -90,22 +93,43 @@ final class CardSessionController: NSObject, ObservableObject {
 
     /// Determines which Apple gate blocks HCE, if any.
     /// Must be called before any attempt to create a CardSession.
+    ///
+    /// The order matters. `NFCReaderSession.readingAvailable` and
+    /// `CardSession.isSupported` both report false when the app lacks the NFC
+    /// entitlements, so they cannot be used to decide that the hardware is
+    /// missing NFC. The hardware verdict comes from the model identifier and
+    /// the permission verdict from the entitlements in the signed profile.
     func evaluateGate() async -> HceGate {
         #if targetEnvironment(simulator)
         gate = .simulator
         #else
-        guard NFCReaderSession.readingAvailable else {
-            gate = .deviceUnsupported
+        capabilities = NfcCapabilities.snapshot()
+
+        // 1. Hardware first: no point checking permissions on a phone
+        //    without an NFC radio.
+        if capabilities.hardware == .absent {
+            gate = .hardwareMissing
             return gate
         }
-        guard CardSession.isSupported else {
-            gate = .deviceUnsupported
+
+        // 2. Does the signed profile actually grant card emulation?
+        if capabilities.profileFound {
+            if !capabilities.hasHCE {
+                gate = .entitlementMissing
+                return gate
+            }
+        } else if capabilities.cardSessionSupported == false {
+            // No embedded profile to inspect — fall back to CoreNFC's own
+            // answer, but report it as a permission problem rather than
+            // claiming the hardware is at fault.
+            gate = .entitlementMissing
             return gate
         }
-        // The entitlement check happens inside CardSession.init(); creating a
-        // session without it traps. We only reach this branch when the
-        // entitlement is genuinely present in the provisioning profile.
+
+        // 3. The entitlement is present; the remaining question is whether
+        //    the current Apple Account and location allow card sessions.
         let eligible = await CardSession.isEligible
+        capabilities.cardSessionEligible = eligible
         gate = eligible ? .ready : .notEligible
         #endif
         return gate

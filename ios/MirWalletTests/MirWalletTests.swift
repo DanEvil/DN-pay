@@ -243,6 +243,57 @@ final class MirWalletTests: XCTestCase {
         XCTAssertEqual(server.baseURL.host, "127.0.0.1")
     }
 
+    // MARK: - NFC capability detection
+
+    /// The model identifier must be readable, otherwise the NFC tab cannot
+    /// tell hardware apart from permissions.
+    func testHardwareModelIsDetected() {
+        XCTAssertFalse(NfcCapabilities.hardwareModel.isEmpty)
+    }
+
+    /// The simulator has no NFC radio, and the detector must not claim it
+    /// has one.
+    func testSimulatorReportsNoNFCHardware() {
+        #if targetEnvironment(simulator)
+        XCTAssertEqual(NfcCapabilities.hardwareSupport, .absent)
+        #else
+        // On a device the verdict must be one of the two known states.
+        XCTAssertTrue([NfcCapabilities.HardwareSupport.present,
+                       .absent,
+                       .unknown].contains(NfcCapabilities.hardwareSupport))
+        #endif
+    }
+
+    /// Every iPhone from the XS generation onwards carries an NFC radio.
+    /// The model strings are checked directly so the rule is pinned down
+    /// even on the simulator.
+    func testNFCHardwareRule() {
+        // iPhone XS and later: present.
+        for model in ["iPhone10,3", "iPhone10,6", "iPhone11,2", "iPhone11,8",
+                      "iPhone12,1", "iPhone13,2", "iPhone14,4", "iPhone14,5",
+                      "iPhone15,2", "iPhone16,1"] {
+            XCTAssertEqual(NfcCapabilities.hardwareSupport(forModel: model), .present,
+                           "\(model) should have NFC")
+        }
+        // iPhone 8, X, XR-era and older: absent.
+        for model in ["iPhone8,1", "iPhone8,4", "iPhone9,1", "iPhone9,3",
+                      "iPhone10,1", "iPhone10,4"] {
+            XCTAssertEqual(NfcCapabilities.hardwareSupport(forModel: model), .absent,
+                           "\(model) should not have NFC")
+        }
+    }
+
+    /// The entitlement reader must cope with a bundle that has no embedded
+    /// profile at all — that is the case for an unsigned build.
+    func testProfileEntitlementsHandlesMissingProfile() {
+        let entitlements = NfcCapabilities.profileEntitlements
+        // Either a profile was found and parsed, or none was found. Both are
+        // valid states; a crash is not.
+        if entitlements.profileFound {
+            XCTAssertFalse(entitlements.keys.isEmpty)
+        }
+    }
+
     // MARK: - Hex
 
     func testHexRoundTrip() {

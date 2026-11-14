@@ -50,44 +50,16 @@ struct ProvisioningError: LocalizedError {
 
 final class TspClient: ObservableObject {
 
-    /// Where the mock TSP lives.
-    ///
-    /// - `embedded`: the server runs inside the app on 127.0.0.1. The phone is
-    ///   fully self-contained: no laptop, no network, no background process.
-    /// - `external`: the Python `server/mock_tsp.py` on the local network.
-    enum Mode: String, CaseIterable, Identifiable {
-        case embedded
-        case external
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .embedded: return "Встроенный (в приложении)"
-            case .external: return "Внешний (в сети)"
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .embedded:
-                return "Сервер работает внутри приложения на 127.0.0.1:\(LocalTspServer.defaultPort). Телефон работает автономно — компьютер и сеть не нужны."
-            case .external:
-                return "Python-сервер server/mock_tsp.py на компьютере в той же сети. Требует запущенного процесса и доступности по Wi-Fi."
-            }
-        }
-    }
-
     static let shared = TspClient()
 
-    /// Base URL of the TSP. Defaults to the mock server on the local network.
-    /// Override in the app UI or via UserDefaults key "tsp.baseURL".
+    /// Base URL of the TSP.
+    ///
+    /// The mock TSP runs inside the app on 127.0.0.1, so the phone is
+    /// self-contained: no laptop, no network, no background process.
+    ///
+    /// Set the UserDefaults key "tsp.baseURL" to point the client at the
+    /// Python `server/mock_tsp.py` on a machine in the local network instead.
     @Published var baseURL: URL
-
-    /// Which TSP the client talks to.
-    @Published var mode: Mode {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "tsp.mode") }
-    }
 
     /// The embedded server, started once and shared.
     private(set) var embeddedServer: LocalTspServer?
@@ -101,9 +73,6 @@ final class TspClient: ObservableObject {
         let fallback = URL(string: "http://127.0.0.1:8787")!
         self.baseURL = baseURL
             ?? (stored.flatMap { URL(string: $0) } ?? fallback)
-
-        let modeRaw = UserDefaults.standard.string(forKey: "tsp.mode")
-        self.mode = Mode(rawValue: modeRaw ?? "embedded") ?? .embedded
 
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
@@ -124,17 +93,14 @@ final class TspClient: ObservableObject {
             try server.start()
             embeddedServer = server
             embeddedError = nil
+            // Talk to the server we just brought up.
+            baseURL = server.baseURL
+            UserDefaults.standard.set(server.baseURL.absoluteString, forKey: "tsp.baseURL")
             return true
         } catch {
             embeddedError = error.localizedDescription
             return false
         }
-    }
-
-    func updateBaseURL(_ string: String) {
-        guard let url = URL(string: string), url.scheme != nil else { return }
-        baseURL = url
-        UserDefaults.standard.set(url.absoluteString, forKey: "tsp.baseURL")
     }
 
     /// Loads the persisted master key, creating one on first launch.
@@ -152,12 +118,12 @@ final class TspClient: ObservableObject {
         return fresh
     }
 
-    /// Switches between the in-app TSP and an external one.
-    func setMode(_ newMode: Mode) {
-        mode = newMode
-        if newMode == .embedded {
-            _ = startEmbeddedServer()
-        }
+    /// Points the client at an external TSP, e.g. the Python server running
+    /// on a machine in the local network.
+    func updateBaseURL(_ string: String) {
+        guard let url = URL(string: string), url.scheme != nil else { return }
+        baseURL = url
+        UserDefaults.standard.set(url.absoluteString, forKey: "tsp.baseURL")
     }
 
     // MARK: Required Fields

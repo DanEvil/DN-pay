@@ -14,7 +14,7 @@ struct MirWalletApp: App {
 
     init() {
         // Bring up the in-app TSP straight away so the first transaction works
-        // without touching the TSP tab.
+        // without any setup.
         _ = TspClient.shared.startEmbeddedServer()
     }
 
