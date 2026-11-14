@@ -458,7 +458,7 @@ final class MirWalletTests: XCTestCase {
             0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x19, 0x90,
             0x9F, 0x53, 0x02, 0x06, 0x43,
         ])
-        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        let parsed = try XCTUnwrap(TerminalTags.parseTerminalAmount(from: data))
         XCTAssertEqual(parsed.amountMinor, "000000001990")
         XCTAssertEqual(parsed.currency, "RUB")
     }
@@ -471,7 +471,7 @@ final class MirWalletTests: XCTestCase {
             0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x04, 0xD2,
             0x9F, 0x53, 0x02, 0x06, 0x43,
         ])
-        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        let parsed = try XCTUnwrap(TerminalTags.parseTerminalAmount(from: data))
         XCTAssertEqual(parsed.amountMinor, "0000000004D2")
         XCTAssertEqual(parsed.currency, "RUB")
     }
@@ -479,7 +479,7 @@ final class MirWalletTests: XCTestCase {
     /// Data without an amount tag yields nothing rather than a wrong amount.
     func testMissingAmountTagYieldsNil() {
         let data = Data([0x9F, 0x53, 0x02, 0x06, 0x43])
-        XCTAssertNil(CardSessionController.parseTerminalAmount(from: data))
+        XCTAssertNil(TerminalTags.parseTerminalAmount(from: data))
     }
 
     /// EMV tags can be one, two or three bytes long.
@@ -490,7 +490,7 @@ final class MirWalletTests: XCTestCase {
             0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x19, 0x90,
             0x9F, 0x53, 0x02, 0x06, 0x43,
         ])
-        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        let parsed = try XCTUnwrap(TerminalTags.parseTerminalAmount(from: data))
         XCTAssertEqual(parsed.amountMinor, "000000001990")
         XCTAssertEqual(parsed.currency, "RUB")
     }
@@ -502,17 +502,17 @@ final class MirWalletTests: XCTestCase {
             0x9F, 0x02, 0x81, 0x02, 0x19, 0x90,
             0x9F, 0x53, 0x02, 0x06, 0x43,
         ])
-        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        let parsed = try XCTUnwrap(TerminalTags.parseTerminalAmount(from: data))
         XCTAssertEqual(parsed.amountMinor, "1990")
         XCTAssertEqual(parsed.currency, "RUB")
     }
 
     /// The ISO 4217 numeric codes map onto the letters the TSP expects.
     func testCurrencyCodesAreMapped() {
-        XCTAssertEqual(CardSessionController.currencyCode(for: "0643"), "RUB")
-        XCTAssertEqual(CardSessionController.currencyCode(for: "0840"), "USD")
-        XCTAssertEqual(CardSessionController.currencyCode(for: "0978"), "EUR")
-        XCTAssertEqual(CardSessionController.currencyCode(for: "9999"), "9999")
+        XCTAssertEqual(TerminalTags.currencyCode(for: "0643"), "RUB")
+        XCTAssertEqual(TerminalTags.currencyCode(for: "0840"), "USD")
+        XCTAssertEqual(TerminalTags.currencyCode(for: "0978"), "EUR")
+        XCTAssertEqual(TerminalTags.currencyCode(for: "9999"), "9999")
     }
 
     // MARK: - Helpers

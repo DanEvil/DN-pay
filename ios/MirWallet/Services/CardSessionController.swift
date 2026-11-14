@@ -64,6 +64,95 @@ enum HceGate: String {
     }
 }
 
+
+// MARK: - Terminal data
+
+/// Parsing of the EMV tags a terminal sends.
+///
+/// Kept at file scope, outside the controller, so it carries no actor
+/// isolation and can be unit tested directly.
+enum TerminalTags {
+
+    /// Pulls the amount and currency out of the terminal's EMV tags.
+    ///
+    /// Tag 9F02 is the amount in minor units and 9F53 is the currency code.
+    /// Both are BER-TLV encoded, so the value is read from the tag list the
+    /// terminal sends.
+    static func parseTerminalAmount(from data: Data) -> (amountMinor: String, currency: String)? {
+        let tags: [String: String] = [
+            "9F02": "amount",
+            "9F53": "currency",
+        ]
+
+        var amount: String?
+        var currency: String?
+
+        var offset = 0
+        while offset + 2 <= data.count {
+            // EMV tags are 1, 2 or 3 bytes long.
+            let tagLength = Self.tagLength(in: data, at: offset)
+            guard tagLength > 0, offset + tagLength < data.count else { break }
+
+            let tag = String(data[offset..<(offset + tagLength)].hexString.uppercased())
+            let lengthOffset = offset + tagLength
+            let lengthByte = data[lengthOffset]
+            var valueStart = lengthOffset + 1
+            var length = Int(lengthByte)
+
+            if lengthByte & 0x80 != 0 {
+                // Long form: the low nibble says how many length bytes follow.
+                let lengthBytes = Int(lengthByte & 0x0F)
+                guard lengthOffset + 1 + lengthBytes <= data.count else { break }
+                var value = 0
+                for i in 0..<lengthBytes {
+                    value = (value << 8) | Int(data[lengthOffset + 1 + i])
+                }
+                length = value
+                valueStart = lengthOffset + 1 + lengthBytes
+            }
+
+            guard valueStart + length <= data.count else { break }
+
+            if tags[tag] == "amount" {
+                amount = data[valueStart..<valueStart + length].hexString.uppercased()
+            } else if tags[tag] == "currency" {
+                // Currency is ISO 4217 numeric: 0643 for RUB.
+                let numeric = data[valueStart..<valueStart + length].hexString.uppercased()
+                currency = Self.currencyCode(for: numeric)
+            }
+
+            offset = valueStart + length
+        }
+
+        guard let amount, let currency else { return nil }
+        return (amount, currency)
+    }
+
+    /// Length of the BER-TLV tag starting at the given offset: 1, 2 or 3
+    /// bytes. Returns 0 when the data is too short to tell.
+    static func tagLength(in data: Data, at offset: Int) -> Int {
+        guard offset < data.count else { return 0 }
+        let first = data[offset]
+        // Low five bits all set means the tag continues in the next byte.
+        guard first & 0x1F == 0x1F else { return 1 }
+        guard offset + 1 < data.count else { return 0 }
+        // High bit set in the second byte means a third byte follows.
+        return data[offset + 1] & 0x80 == 0 ? 2 : 3
+    }
+
+    /// Maps an ISO 4217 numeric code onto the letters the TSP expects.
+    static func currencyCode(for numeric: String) -> String {
+        switch numeric {
+        case "0643": return "RUB"
+        case "0840": return "USD"
+        case "0978": return "EUR"
+        case "0756": return "CHF"
+        case "0384": return "XCD"
+        default: return numeric
+        }
+    }
+}
+
 // MARK: - Controller
 
 @MainActor
@@ -252,82 +341,9 @@ final class CardSessionController: NSObject, ObservableObject {
 
     /// Pulls the amount and currency out of the terminal's EMV tags.
     ///
-    /// Tag 9F02 is the amount in minor units and 9F53 is the currency code.
-    /// Both are BER-TLV encoded, so the value is read from the tag list the
-    /// terminal sends.
-    static func parseTerminalAmount(from data: Data) -> (amountMinor: String, currency: String)? {
-        let tags: [String: String] = [
-            "9F02": "amount",
-            "9F53": "currency",
-        ]
+    /// The parser lives outside the controller so it stays free of actor
+    /// isolation and can be unit tested directly.
 
-        var amount: String?
-        var currency: String?
-
-        var offset = 0
-        while offset + 2 <= data.count {
-            // EMV tags are 1, 2 or 3 bytes long.
-            let tagLength = Self.tagLength(in: data, at: offset)
-            guard tagLength > 0, offset + tagLength < data.count else { break }
-
-            let tag = String(data[offset..<(offset + tagLength)].hexString.uppercased())
-            let lengthOffset = offset + tagLength
-            let lengthByte = data[lengthOffset]
-            var valueStart = lengthOffset + 1
-            var length = Int(lengthByte)
-
-            if lengthByte & 0x80 != 0 {
-                // Long form: the low nibble says how many length bytes follow.
-                let lengthBytes = Int(lengthByte & 0x0F)
-                guard lengthOffset + 1 + lengthBytes <= data.count else { break }
-                var value = 0
-                for i in 0..<lengthBytes {
-                    value = (value << 8) | Int(data[lengthOffset + 1 + i])
-                }
-                length = value
-                valueStart = lengthOffset + 1 + lengthBytes
-            }
-
-            guard valueStart + length <= data.count else { break }
-
-            if tags[tag] == "amount" {
-                amount = data[valueStart..<valueStart + length].hexString.uppercased()
-            } else if tags[tag] == "currency" {
-                // Currency is ISO 4217 numeric: 0643 for RUB.
-                let numeric = data[valueStart..<valueStart + length].hexString.uppercased()
-                currency = Self.currencyCode(for: numeric)
-            }
-
-            offset = valueStart + length
-        }
-
-        guard let amount, let currency else { return nil }
-        return (amount, currency)
-    }
-
-    /// Length of the BER-TLV tag starting at the given offset: 1, 2 or 3
-    /// bytes. Returns 0 when the data is too short to tell.
-    static func tagLength(in data: Data, at offset: Int) -> Int {
-        guard offset < data.count else { return 0 }
-        let first = data[offset]
-        // Low five bits all set means the tag continues in the next byte.
-        guard first & 0x1F == 0x1F else { return 1 }
-        guard offset + 1 < data.count else { return 0 }
-        // High bit set in the second byte means a third byte follows.
-        return data[offset + 1] & 0x80 == 0 ? 2 : 3
-    }
-
-    /// Maps an ISO 4217 numeric code onto the letters the TSP expects.
-    static func currencyCode(for numeric: String) -> String {
-        switch numeric {
-        case "0643": return "RUB"
-        case "0840": return "USD"
-        case "0978": return "EUR"
-        case "0756": return "CHF"
-        case "0384": return "XCD"
-        default: return numeric
-        }
-    }
 
     // MARK: - Minimal ISO 7816 handling
 
