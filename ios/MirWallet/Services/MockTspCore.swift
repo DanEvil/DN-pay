@@ -104,7 +104,7 @@ final class MockTspCore {
         }
 
         let brand = Self.detectScheme(pan)
-        log("check-card", brand: brand, last4: String(pan.suffix(4)))
+        log("check-card", ["brand": brand, "last4": String(pan.suffix(4))])
         return (200, [
             "approved": true,
             "scheme": brand,
@@ -143,7 +143,7 @@ final class MockTspCore {
         )
         lock.unlock()
 
-        log("provision", tokenId: tokenId, brand: Self.detectScheme(pan))
+        log("provision", ["tokenId": tokenId, "brand": Self.detectScheme(pan)])
 
         return (200, [
             "tokenId": tokenId,
@@ -209,7 +209,7 @@ final class MockTspCore {
         tokens[tokenId]?.atc = max(tokens[tokenId]?.atc ?? 0, atc)
         lock.unlock()
 
-        log("authorize", tokenId: tokenId, atc: atc, amount: amount)
+        log("authorize", ["tokenId": tokenId, "atc": atc, "amount": amount])
 
         return (200, [
             "approved": true,
