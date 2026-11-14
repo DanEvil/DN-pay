@@ -50,15 +50,19 @@ struct TerminalRequest: Equatable {
 // MARK: - Terminal
 
 /// Simulated point-of-sale terminal.
-struct MockTerminal {
+///
+/// A class rather than a struct, because it keeps a running position in the
+/// list of amounts and callers should not have to own a mutable copy.
+final class MockTerminal {
 
     /// Amounts the terminal cycles through, in minor units.
-    var amounts: [String]
+    let amounts: [String]
 
     /// Currency the terminal charges in.
-    var currency: String
+    let currency: String
 
-    private var index = 0
+    /// How many requests have been made so far.
+    private(set) var requestCount = 0
 
     init(amounts: [String] = ["1990", "4990", "100"], currency: String = "RUB") {
         self.amounts = amounts.isEmpty ? ["1990"] : amounts
@@ -66,9 +70,9 @@ struct MockTerminal {
     }
 
     /// Produces the next transaction request.
-    mutating func nextRequest() -> TerminalRequest {
-        let amount = amounts[index % amounts.count]
-        index += 1
+    func nextRequest() -> TerminalRequest {
+        let amount = amounts[requestCount % amounts.count]
+        requestCount += 1
         return TerminalRequest(
             amountMinor: amount,
             currency: currency,

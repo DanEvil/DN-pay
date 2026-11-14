@@ -66,7 +66,7 @@ final class PaymentCoordinator: ObservableObject {
     private let tsp = TspClient.shared
     private let keychain = KeychainStore()
     private let authenticator = BiometricAuthenticator()
-    private var terminal = MockTerminal()
+    private let terminal = MockTerminal()
     private var sessionKey: Data?
 
     /// The card that will be used for the next transaction.
