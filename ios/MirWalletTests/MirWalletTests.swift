@@ -301,4 +301,162 @@ final class MirWalletTests: XCTestCase {
         XCTAssertEqual(data.hexString, "000fffa5")
         XCTAssertEqual(Data(hexString: "000fffa5"), data)
     }
+
+    // MARK: - Wallet
+
+    /// A fresh wallet holds nothing and has no primary card.
+    func testWalletStartsEmpty() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        XCTAssertTrue(store.cards.isEmpty)
+        XCTAssertNil(store.primaryCard)
+    }
+
+    /// The first saved card becomes the primary one.
+    func testFirstSavedCardBecomesPrimary() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        XCTAssertEqual(store.cards.count, 1)
+        XCTAssertEqual(store.primaryCard?.id, "tok_a")
+    }
+
+    /// Saving a second card must not steal the primary slot.
+    func testSecondCardDoesNotStealPrimary() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        store.add(Self.walletCard(tokenId: "tok_b", last4: "2222"))
+        XCTAssertEqual(store.primaryCard?.id, "tok_a")
+        XCTAssertEqual(store.cards.count, 2)
+    }
+
+    /// The user picks the primary card explicitly.
+    func testPrimaryCardCanBeSwitched() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        store.add(Self.walletCard(tokenId: "tok_b", last4: "2222"))
+        store.setPrimary(id: "tok_b")
+        XCTAssertEqual(store.primaryCard?.id, "tok_b")
+    }
+
+    /// Removing the primary card promotes another one, so the wallet never
+    /// ends up without a default.
+    func testRemovingPrimaryPromotesAnotherCard() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        store.add(Self.walletCard(tokenId: "tok_b", last4: "2222"))
+        store.remove(id: "tok_a")
+        XCTAssertEqual(store.primaryCard?.id, "tok_b")
+        XCTAssertEqual(store.cards.count, 1)
+    }
+
+    /// Removing the last card leaves no primary.
+    func testRemovingLastCardClearsPrimary() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        store.remove(id: "tok_a")
+        XCTAssertNil(store.primaryCard)
+    }
+
+    /// Saving the same card twice must not duplicate it.
+    func testSavingSameCardTwiceDoesNotDuplicate() {
+        let store = WalletStore(fileURL: Self.temporaryWalletURL())
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        XCTAssertEqual(store.cards.count, 1)
+    }
+
+    /// The wallet survives an app restart.
+    func testWalletPersistsAcrossInstances() {
+        let url = Self.temporaryWalletURL()
+        let first = WalletStore(fileURL: url)
+        first.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        first.add(Self.walletCard(tokenId: "tok_b", last4: "2222"))
+        first.setPrimary(id: "tok_b")
+
+        let second = WalletStore(fileURL: url)
+        XCTAssertEqual(second.cards.count, 2)
+        XCTAssertEqual(second.primaryCard?.id, "tok_b")
+    }
+
+    /// The PAN must never end up in the wallet file.
+    func testWalletDoesNotStorePAN() throws {
+        let url = Self.temporaryWalletURL()
+        let store = WalletStore(fileURL: url)
+        store.add(Self.walletCard(tokenId: "tok_a", last4: "1111"))
+        let raw = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(raw.contains("2200123456789019"))
+        XCTAssertFalse(raw.contains("cvv"))
+    }
+
+    // MARK: - Terminal
+
+    /// The terminal owns the amount: it is what the app signs and displays.
+    func testTerminalRequestCarriesAmount() {
+        let terminal = MockTerminal(amounts: ["1990"], currency: "RUB")
+        let request = terminal.nextRequest()
+        XCTAssertEqual(request.amountMinor, "1990")
+        XCTAssertEqual(request.currency, "RUB")
+        XCTAssertEqual(request.amountDisplay, "19.90")
+    }
+
+    /// Requests differ in their unpredictable number, so two transactions
+    /// never produce the same cryptogram.
+    func testTerminalRequestsUseFreshUnpredictableNumbers() {
+        let terminal = MockTerminal(amounts: ["1990"], currency: "RUB")
+        let first = terminal.nextRequest()
+        let second = terminal.nextRequest()
+        XCTAssertNotEqual(first.unpredictableNumber, second.unpredictableNumber)
+    }
+
+    /// The amount the terminal asks for is the amount that gets signed, and
+    /// the TSP accepts it.
+    func testTerminalAmountIsTheAmountThatGetsSigned() throws {
+        let terminal = MockTerminal(amounts: ["4990"], currency: "RUB")
+        let request = terminal.nextRequest()
+
+        let core = MockTspCore(masterKey: Data(repeating: 0x5a, count: 32))
+        let (_, provisioning) = core.handle(path: "/tsp/link-and-provision", method: "POST",
+                                            body: ["pan": "2200123456789019",
+                                                   "device": ["udid": "TESTUDID0001"]])
+        let tokenId = try XCTUnwrap(provisioning["tokenId"] as? String)
+        let sessionKey = try XCTUnwrap(Data(base64Encoded: provisioning["sessionKey"] as? String ?? ""))
+
+        let arqc = EmvCrypto.computeARQC(sessionKey: sessionKey, atc: 1,
+                                          amountMinor: request.amountMinor,
+                                          currency: request.currency,
+                                          unpredictableNumber: request.unpredictableNumber,
+                                          tvr: request.tvr, transactionType: request.transactionType)
+
+        let (_, verified) = core.handle(path: "/tsp/verify-cryptogram", method: "POST",
+                                        body: ["tokenId": tokenId, "atc": 1,
+                                               "amountMinor": request.amountMinor,
+                                               "currency": request.currency,
+                                               "un": request.unpredictableNumber.hexString,
+                                               "tvr": request.tvr,
+                                               "txnType": request.transactionType,
+                                               "arqc": arqc.base64EncodedString()])
+        XCTAssertEqual(verified["approved"] as? Bool, true)
+    }
+
+    // MARK: - Biometrics
+
+    /// The confirmation prompt must name the method the user will see.
+    func testBiometryTypeIsNamed() {
+        XCTAssertEqual(BiometricAuthenticator.method(for: .faceID), .faceID)
+        XCTAssertEqual(BiometricAuthenticator.method(for: .touchID), .touchID)
+        XCTAssertEqual(BiometricAuthenticator.method(for: .none), .none)
+    }
+
+    // MARK: - Helpers
+
+    private static func temporaryWalletURL() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wallet-\(UUID().uuidString).json")
+        try? FileManager.default.removeItem(at: url)
+        return url
+    }
+
+    private static func walletCard(tokenId: String, last4: String) -> WalletCard {
+        WalletCard(tokenId: tokenId, dpan: "555555000000000001", last4: last4,
+                   scheme: "mir", expiry: "12/29")
+    }
 }

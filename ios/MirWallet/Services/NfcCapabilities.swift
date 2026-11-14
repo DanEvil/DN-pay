@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import CoreNFC
 import Darwin
 
 enum NfcCapabilities {
