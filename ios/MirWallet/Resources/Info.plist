@@ -24,6 +24,8 @@
 	<true/>
 	<key>NFCReaderUsageDescription</key>
 	<string>Приложение использует NFC для чтения бесконтактных карт и проверки протокола эмуляции карты.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID подтверждает оплату, чтобы выданная криптограмма точно соответствовала сумме, которую вы одобрили.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The mock TSP runs over plain HTTP on the local network during development. -->
