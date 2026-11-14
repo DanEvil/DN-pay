@@ -57,10 +57,21 @@ enum NfcCapabilities {
         hardwareSupport(forModel: hardwareModel)
     }
 
+    /// iPhone models that carry an NFC radio while still using the iPhone10
+    /// identifier family: iPhone X (10,3) and iPhone XS (10,6).
+    ///
+    /// The other iPhone10 models are the iPhone 8 and 8 Plus, which have no
+    /// NFC. The family therefore cannot be judged by the major number alone.
+    private static let nfcCapableIphone10Models: Set<String> = [
+        "iPhone10,3",
+        "iPhone10,6",
+    ]
+
     /// Whether the given model identifier corresponds to a device with NFC.
     ///
-    /// iPhone XS (iPhone10,3) was the first iPhone with NFC; everything
-    /// after it has one. Earlier models (iPhone8,x, iPhone9,x) do not.
+    /// iPhone X (iPhone10,3) was the first iPhone with NFC. Every iPhone
+    /// from the XS generation onwards has one; the iPhone 8 and 8 Plus do
+    /// not.
     static func hardwareSupport(forModel model: String) -> HardwareSupport {
         guard model.hasPrefix("iPhone") else {
             // Only a few iPad models have NFC, and the mapping is not worth
@@ -77,7 +88,9 @@ enum NfcCapabilities {
         }
 
         if major > 10 { return .present }
-        if major == 10 { return minor >= 3 ? .present : .absent }
+        if major == 10 {
+            return nfcCapableIphone10Models.contains(model) ? .present : .absent
+        }
         return .absent
     }
 

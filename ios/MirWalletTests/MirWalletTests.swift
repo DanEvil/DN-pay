@@ -251,13 +251,15 @@ final class MirWalletTests: XCTestCase {
         XCTAssertFalse(NfcCapabilities.hardwareModel.isEmpty)
     }
 
-    /// The simulator has no NFC radio, and the detector must not claim it
-    /// has one.
-    func testSimulatorReportsNoNFCHardware() {
+    /// The simulator has no model identifier, so the hardware verdict there
+    /// is "unknown" — and never "present".
+    func testSimulatorDoesNotClaimNFC() {
         #if targetEnvironment(simulator)
-        XCTAssertEqual(NfcCapabilities.hardwareSupport, .absent)
+        XCTAssertNotEqual(NfcCapabilities.hardwareSupport, .present)
+        XCTAssertTrue([NfcCapabilities.HardwareSupport.absent,
+                       .unknown].contains(NfcCapabilities.hardwareSupport))
         #else
-        // On a device the verdict must be one of the two known states.
+        // On a device the verdict must be one of the known states.
         XCTAssertTrue([NfcCapabilities.HardwareSupport.present,
                        .absent,
                        .unknown].contains(NfcCapabilities.hardwareSupport))
@@ -275,9 +277,11 @@ final class MirWalletTests: XCTestCase {
             XCTAssertEqual(NfcCapabilities.hardwareSupport(forModel: model), .present,
                            "\(model) should have NFC")
         }
-        // iPhone 8, X, XR-era and older: absent.
+        // iPhone 8, X, XR-era and older: absent. Note that the iPhone10
+        // family is mixed: 10,3 and 10,6 are the X and XS, the rest are
+        // the iPhone 8 and 8 Plus.
         for model in ["iPhone8,1", "iPhone8,4", "iPhone9,1", "iPhone9,3",
-                      "iPhone10,1", "iPhone10,4"] {
+                      "iPhone10,1", "iPhone10,2", "iPhone10,4", "iPhone10,5"] {
             XCTAssertEqual(NfcCapabilities.hardwareSupport(forModel: model), .absent,
                            "\(model) should not have NFC")
         }
