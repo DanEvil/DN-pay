@@ -4,6 +4,7 @@ server/*.key
 
 # Build artefacts
 MirWallet.ipa
+MirWallet-signed.ipa
 build/
 DerivedData/
 *.xcarchive
