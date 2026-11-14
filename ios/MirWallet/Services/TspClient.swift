@@ -144,7 +144,7 @@ final class TspClient: ObservableObject {
     private static func loadOrCreateMasterKey() -> Data {
         let keychain = KeychainStore()
         if let stored = try? keychain.data(for: KeychainStore.Key.masterKey),
-           let stored, stored.count == 32 {
+           stored.count == 32 {
             return stored
         }
         let fresh = EmvCrypto.randomBytes(count: 32)
