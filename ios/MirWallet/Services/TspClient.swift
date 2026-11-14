@@ -119,21 +119,7 @@ final class TspClient: ObservableObject {
     func startEmbeddedServer() -> Bool {
         if let embeddedServer, embeddedServer.running { return true }
 
-        let keychain = KeychainStore()
-        let masterKey: Data
-        do {
-            if let stored = try keychain.data(for: KeychainStore.Key.masterKey), stored.count == 32 {
-                masterKey = stored
-            } else {
-                masterKey = EmvCrypto.randomBytes(count: 32)
-                try keychain.set(masterKey, for: KeychainStore.Key.masterKey)
-            }
-        } catch {
-            // A keychain failure is not fatal: fall back to an ephemeral key.
-            masterKey = EmvCrypto.randomBytes(count: 32)
-        }
-
-        let server = LocalTspServer(core: MockTspCore(masterKey: masterKey))
+        let server = LocalTspServer(core: MockTspCore(masterKey: Self.loadOrCreateMasterKey()))
         do {
             try server.start()
             embeddedServer = server
@@ -149,6 +135,21 @@ final class TspClient: ObservableObject {
         guard let url = URL(string: string), url.scheme != nil else { return }
         baseURL = url
         UserDefaults.standard.set(url.absoluteString, forKey: "tsp.baseURL")
+    }
+
+    /// Loads the persisted master key, creating one on first launch.
+    ///
+    /// The key has to survive relaunches, otherwise session keys derived
+    /// from it would stop verifying after the app restarts.
+    private static func loadOrCreateMasterKey() -> Data {
+        let keychain = KeychainStore()
+        if let stored = try? keychain.data(for: KeychainStore.Key.masterKey),
+           let stored, stored.count == 32 {
+            return stored
+        }
+        let fresh = EmvCrypto.randomBytes(count: 32)
+        try? keychain.set(fresh, for: KeychainStore.Key.masterKey)
+        return fresh
     }
 
     /// Switches between the in-app TSP and an external one.

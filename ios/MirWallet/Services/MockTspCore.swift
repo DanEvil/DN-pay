@@ -205,8 +205,10 @@ final class MockTspCore {
             return (200, ["approved": false, "reason": "cryptogram_mismatch"])
         }
 
-        tokens[tokenId]?.lastAtc = atc
-        tokens[tokenId]?.atc = max(tokens[tokenId]?.atc ?? 0, atc)
+        var updated = token
+        updated.lastAtc = atc
+        updated.atc = max(token.atc, atc)
+        tokens[tokenId] = updated
         lock.unlock()
 
         log("authorize", ["tokenId": tokenId, "atc": atc, "amount": amount])

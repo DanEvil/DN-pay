@@ -174,16 +174,15 @@ struct TspSettingsView: View {
     }
 
     private func checkHealth() async {
-        let url: URL
+        var url = tsp.embeddedServer?.baseURL ?? URL(string: "http://127.0.0.1:8787")!
         if tsp.mode == .embedded {
             _ = tsp.startEmbeddedServer()
-            url = tsp.embeddedServer?.baseURL ?? URL(string: "http://127.0.0.1:8787")!
-        } else {
-            guard let parsed = URL(string: urlText) else {
-                health = "неверный URL"
-                return
-            }
+            url = tsp.embeddedServer?.baseURL ?? url
+        } else if let parsed = URL(string: urlText) {
             url = parsed
+        } else {
+            health = "неверный URL"
+            return
         }
         do {
             let (data, _) = try await URLSession.shared.data(from: url.appendingPathComponent("/tsp/health"))
