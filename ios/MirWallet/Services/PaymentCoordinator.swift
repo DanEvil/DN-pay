@@ -178,8 +178,7 @@ final class PaymentCoordinator: ObservableObject {
         tokenId = card.tokenId
         dpan = card.dpan
         last4 = card.last4
-        if let key = try? keychain.data(for: KeychainStore.Key.sessionKey(for: card.tokenId)),
-           let key {
+        if let key = try? keychain.data(for: KeychainStore.Key.sessionKey(for: card.tokenId)) {
             sessionKey = key
             appendLog("Основная карта: ••••\(card.last4)")
         } else {
