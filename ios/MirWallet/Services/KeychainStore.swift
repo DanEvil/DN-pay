@@ -88,6 +88,7 @@ struct KeychainStore {
     // MARK: - Named keys
 
     enum Key {
+        static let masterKey = "tsp.masterKey"
         static let sessionKey = "tsp.sessionKey"
         static let tokenId = "tsp.tokenId"
         static let dpan = "tsp.dpan"

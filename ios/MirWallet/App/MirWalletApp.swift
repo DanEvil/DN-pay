@@ -12,6 +12,12 @@ struct MirWalletApp: App {
     @StateObject private var payment = PaymentCoordinator()
     @StateObject private var hce = CardSessionController()
 
+    init() {
+        // Bring up the in-app TSP straight away so the first transaction works
+        // without touching the TSP tab.
+        _ = TspClient.shared.startEmbeddedServer()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -29,6 +29,24 @@
 		<!-- The mock TSP runs over plain HTTP on the local network during development. -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- The in-app TSP listens on 127.0.0.1, so that host needs plain HTTP too. -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict>

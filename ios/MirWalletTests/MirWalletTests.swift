@@ -162,6 +162,87 @@ final class MirWalletTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
+    // MARK: - Embedded TSP
+
+    /// The in-app TSP must agree with the Python server on the card checks.
+    func testEmbeddedCoreMirrorsPythonCardChecks() {
+        let core = MockTspCore(masterKey: Data(repeating: 0x5a, count: 32))
+
+        let (status, ok) = core.handle(path: "/tsp/check-card", method: "POST",
+                                       body: ["pan": "2200123456789019", "cvv": "123", "expiry": "12/29"])
+        XCTAssertEqual(status, 200)
+        XCTAssertEqual(ok["approved"] as? Bool, true)
+        XCTAssertEqual(ok["scheme"] as? String, "mir")
+        XCTAssertEqual(ok["last4"] as? String, "9019")
+
+        let (_, luhnFailed) = core.handle(path: "/tsp/check-card", method: "POST",
+                                          body: ["pan": "2200123456789018", "cvv": "123", "expiry": "12/29"])
+        XCTAssertEqual(luhnFailed["approved"] as? Bool, false)
+        XCTAssertEqual(luhnFailed["reason"] as? String, "luhn_failed")
+
+        let (_, badCvv) = core.handle(path: "/tsp/check-card", method: "POST",
+                                      body: ["pan": "2200123456789019", "cvv": "1", "expiry": "12/29"])
+        XCTAssertEqual(badCvv["reason"] as? String, "cvv_length")
+    }
+
+    /// Full round trip through the embedded core: provision, sign, verify.
+    func testEmbeddedCoreApprovesValidCryptogram() throws {
+        let core = MockTspCore(masterKey: Data(repeating: 0x5a, count: 32))
+
+        let (status, provisioning) = core.handle(path: "/tsp/link-and-provision", method: "POST",
+                                                 body: ["pan": "2200123456789019",
+                                                        "device": ["udid": "TESTUDID0001"]])
+        XCTAssertEqual(status, 200)
+        let tokenId = try XCTUnwrap(provisioning["tokenId"] as? String)
+        let sessionKey = try XCTUnwrap(Data(base64Encoded: provisioning["sessionKey"] as? String ?? ""))
+
+        let un = Data(repeating: 0x11, count: 8)
+        let arqc = EmvCrypto.computeARQC(sessionKey: sessionKey, atc: 1,
+                                          amountMinor: "4990", currency: "RUB",
+                                          unpredictableNumber: un, tvr: "0000000000",
+                                          transactionType: "00")
+
+        let (_, verified) = core.handle(path: "/tsp/verify-cryptogram", method: "POST",
+                                        body: ["tokenId": tokenId, "atc": 1,
+                                               "amountMinor": "4990", "currency": "RUB",
+                                               "un": un.hexString, "tvr": "0000000000",
+                                               "txnType": "00",
+                                               "arqc": arqc.base64EncodedString()])
+        XCTAssertEqual(verified["approved"] as? Bool, true)
+    }
+
+    /// Replaying the same ATC must be refused, exactly like the Python server.
+    func testEmbeddedCoreRejectsReplay() throws {
+        let core = MockTspCore(masterKey: Data(repeating: 0x5a, count: 32))
+        let (_, provisioning) = core.handle(path: "/tsp/link-and-provision", method: "POST",
+                                            body: ["pan": "2200123456789019",
+                                                   "device": ["udid": "TESTUDID0001"]])
+        let tokenId = try XCTUnwrap(provisioning["tokenId"] as? String)
+        let sessionKey = try XCTUnwrap(Data(base64Encoded: provisioning["sessionKey"] as? String ?? ""))
+
+        let un = Data(repeating: 0x11, count: 8)
+        let arqc = EmvCrypto.computeARQC(sessionKey: sessionKey, atc: 1,
+                                          amountMinor: "4990", currency: "RUB",
+                                          unpredictableNumber: un, tvr: "0000000000",
+                                          transactionType: "00")
+        let body: [String: Any] = ["tokenId": tokenId, "atc": 1, "amountMinor": "4990",
+                                   "currency": "RUB", "un": un.hexString, "tvr": "0000000000",
+                                   "txnType": "00", "arqc": arqc.base64EncodedString()]
+
+        let (_, first) = core.handle(path: "/tsp/verify-cryptogram", method: "POST", body: body)
+        XCTAssertEqual(first["approved"] as? Bool, true)
+
+        let (_, replay) = core.handle(path: "/tsp/verify-cryptogram", method: "POST", body: body)
+        XCTAssertEqual(replay["approved"] as? Bool, false)
+        XCTAssertEqual(replay["reason"] as? String, "atc_replay")
+    }
+
+    /// The embedded server must bind to loopback, never to the LAN.
+    func testEmbeddedServerBindsToLoopbackOnly() {
+        let server = LocalTspServer(core: MockTspCore(masterKey: Data(repeating: 0x5a, count: 32)))
+        XCTAssertEqual(server.baseURL.host, "127.0.0.1")
+    }
+
     // MARK: - Hex
 
     func testHexRoundTrip() {

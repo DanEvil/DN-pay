@@ -50,11 +50,49 @@ struct ProvisioningError: LocalizedError {
 
 final class TspClient: ObservableObject {
 
+    /// Where the mock TSP lives.
+    ///
+    /// - `embedded`: the server runs inside the app on 127.0.0.1. The phone is
+    ///   fully self-contained: no laptop, no network, no background process.
+    /// - `external`: the Python `server/mock_tsp.py` on the local network.
+    enum Mode: String, CaseIterable, Identifiable {
+        case embedded
+        case external
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .embedded: return "Встроенный (в приложении)"
+            case .external: return "Внешний (в сети)"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .embedded:
+                return "Сервер работает внутри приложения на 127.0.0.1:\(LocalTspServer.defaultPort). Телефон работает автономно — компьютер и сеть не нужны."
+            case .external:
+                return "Python-сервер server/mock_tsp.py на компьютере в той же сети. Требует запущенного процесса и доступности по Wi-Fi."
+            }
+        }
+    }
+
     static let shared = TspClient()
 
     /// Base URL of the TSP. Defaults to the mock server on the local network.
     /// Override in the app UI or via UserDefaults key "tsp.baseURL".
     @Published var baseURL: URL
+
+    /// Which TSP the client talks to.
+    @Published var mode: Mode {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "tsp.mode") }
+    }
+
+    /// The embedded server, started once and shared.
+    private(set) var embeddedServer: LocalTspServer?
+
+    @Published private(set) var embeddedError: String?
 
     private let session: URLSession
 
@@ -63,16 +101,62 @@ final class TspClient: ObservableObject {
         let fallback = URL(string: "http://127.0.0.1:8787")!
         self.baseURL = baseURL
             ?? (stored.flatMap { URL(string: $0) } ?? fallback)
+
+        let modeRaw = UserDefaults.standard.string(forKey: "tsp.mode")
+        self.mode = Mode(rawValue: modeRaw ?? "embedded") ?? .embedded
+
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
         self.session = URLSession(configuration: config)
     }
 
+    /// Starts the in-app TSP and points the client at it.
+    ///
+    /// The master key is persisted in the Keychain so tokens issued by a
+    /// previous launch stay verifiable across restarts.
+    @discardableResult
+    func startEmbeddedServer() -> Bool {
+        if let embeddedServer, embeddedServer.running { return true }
+
+        let keychain = KeychainStore()
+        let masterKey: Data
+        do {
+            if let stored = try keychain.data(for: KeychainStore.Key.masterKey), stored.count == 32 {
+                masterKey = stored
+            } else {
+                masterKey = EmvCrypto.randomBytes(count: 32)
+                try keychain.set(masterKey, for: KeychainStore.Key.masterKey)
+            }
+        } catch {
+            // A keychain failure is not fatal: fall back to an ephemeral key.
+            masterKey = EmvCrypto.randomBytes(count: 32)
+        }
+
+        let server = LocalTspServer(core: MockTspCore(masterKey: masterKey))
+        do {
+            try server.start()
+            embeddedServer = server
+            embeddedError = nil
+            return true
+        } catch {
+            embeddedError = error.localizedDescription
+            return false
+        }
+    }
+
     func updateBaseURL(_ string: String) {
         guard let url = URL(string: string), url.scheme != nil else { return }
         baseURL = url
         UserDefaults.standard.set(url.absoluteString, forKey: "tsp.baseURL")
+    }
+
+    /// Switches between the in-app TSP and an external one.
+    func setMode(_ newMode: Mode) {
+        mode = newMode
+        if newMode == .embedded {
+            _ = startEmbeddedServer()
+        }
     }
 
     // MARK: Required Fields

@@ -106,18 +106,41 @@ struct TspSettingsView: View {
     @State private var urlText: String = ""
     @State private var health: String = "—"
 
+    private var tsp: TspClient { TspClient.shared }
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("Адрес TSP") {
-                    TextField("http://192.168.x.x:8787", text: $urlText)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Button("Сохранить") {
-                        TspClient.shared.updateBaseURL(urlText)
-                        health = "…"
+                Section("Режим TSP") {
+                    Picker("Источник", selection: Binding(
+                        get: { tsp.mode },
+                        set: { tsp.setMode($0) }
+                    )) {
+                        ForEach(TspClient.Mode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
+                    .pickerStyle(.segmented)
+
+                    Text(tsp.mode.detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if tsp.mode == .external {
+                    Section("Адрес TSP") {
+                        TextField("http://192.168.x.x:8787", text: $urlText)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Button("Сохранить") {
+                            tsp.updateBaseURL(urlText)
+                            health = "…"
+                        }
+                    }
+                }
+
+                Section {
                     Button("Проверить") {
                         Task { await checkHealth() }
                     }
@@ -127,23 +150,40 @@ struct TspSettingsView: View {
                     Text(health)
                         .font(.footnote.monospaced())
                         .foregroundStyle(.secondary)
+                    if let error = tsp.embeddedError {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                 } header: {
                     Text("Состояние")
                 } footer: {
-                    Text("Локальный mock TSP запускается командой: python3 server/mock_tsp.py")
+                    Text(tsp.mode == .embedded
+                         ? "Встроенный TSP поднят на 127.0.0.1 — доступен только с самого телефона."
+                         : "Локальный mock TSP запускается командой: python3 server/mock_tsp.py")
                 }
             }
             .navigationTitle("TSP")
             .onAppear {
-                urlText = TspClient.shared.baseURL.absoluteString
+                urlText = tsp.baseURL.absoluteString
+                if tsp.mode == .embedded {
+                    _ = tsp.startEmbeddedServer()
+                }
             }
         }
     }
 
     private func checkHealth() async {
-        guard let url = URL(string: urlText) else {
-            health = "неверный URL"
-            return
+        let url: URL
+        if tsp.mode == .embedded {
+            _ = tsp.startEmbeddedServer()
+            url = tsp.embeddedServer?.baseURL ?? URL(string: "http://127.0.0.1:8787")!
+        } else {
+            guard let parsed = URL(string: urlText) else {
+                health = "неверный URL"
+                return
+            }
+            url = parsed
         }
         do {
             let (data, _) = try await URLSession.shared.data(from: url.appendingPathComponent("/tsp/health"))
