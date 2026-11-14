@@ -446,6 +446,75 @@ final class MirWalletTests: XCTestCase {
         XCTAssertEqual(BiometricAuthenticator.method(for: .none), .none)
     }
 
+
+    // MARK: - Terminal EMV tags
+
+    /// The amount and currency come from the terminal's own EMV tags, so the
+    /// app signs what the terminal asked for.
+    func testTerminalAmountIsParsedFromEmvTags() throws {
+        // 9F02 (amount, 6 bytes n12) = 000000001990
+        // 9F53 (currency) = 0643 (RUB)
+        let data = Data([
+            0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x19, 0x90,
+            0x9F, 0x53, 0x02, 0x06, 0x43,
+        ])
+        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        XCTAssertEqual(parsed.amountMinor, "000000001990")
+        XCTAssertEqual(parsed.currency, "RUB")
+    }
+
+    /// A tag the app does not know must not break the walk.
+    func testUnknownTagsAreSkipped() throws {
+        // 5A08 (PAN) first, then 9F02 and 9F53.
+        let data = Data([
+            0x5A, 0x08, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x56,
+            0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x04, 0xD2,
+            0x9F, 0x53, 0x02, 0x06, 0x43,
+        ])
+        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        XCTAssertEqual(parsed.amountMinor, "0000000004D2")
+        XCTAssertEqual(parsed.currency, "RUB")
+    }
+
+    /// Data without an amount tag yields nothing rather than a wrong amount.
+    func testMissingAmountTagYieldsNil() {
+        let data = Data([0x9F, 0x53, 0x02, 0x06, 0x43])
+        XCTAssertNil(CardSessionController.parseTerminalAmount(from: data))
+    }
+
+    /// EMV tags can be one, two or three bytes long.
+    func testThreeByteTagIsSkipped() throws {
+        // 9FA102 (3-byte tag, length 2) before the amount and currency.
+        let data = Data([
+            0x9F, 0xA1, 0x02, 0x02, 0x00, 0x00,
+            0x9F, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00, 0x19, 0x90,
+            0x9F, 0x53, 0x02, 0x06, 0x43,
+        ])
+        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        XCTAssertEqual(parsed.amountMinor, "000000001990")
+        XCTAssertEqual(parsed.currency, "RUB")
+    }
+
+    /// A length in the long form is still read correctly.
+    func testLongFormLengthIsRead() throws {
+        // 9F02 with a two-byte length encoding the value 0x1990.
+        let data = Data([
+            0x9F, 0x02, 0x81, 0x02, 0x19, 0x90,
+            0x9F, 0x53, 0x02, 0x06, 0x43,
+        ])
+        let parsed = try XCTUnwrap(CardSessionController.parseTerminalAmount(from: data))
+        XCTAssertEqual(parsed.amountMinor, "1990")
+        XCTAssertEqual(parsed.currency, "RUB")
+    }
+
+    /// The ISO 4217 numeric codes map onto the letters the TSP expects.
+    func testCurrencyCodesAreMapped() {
+        XCTAssertEqual(CardSessionController.currencyCode(for: "0643"), "RUB")
+        XCTAssertEqual(CardSessionController.currencyCode(for: "0840"), "USD")
+        XCTAssertEqual(CardSessionController.currencyCode(for: "0978"), "EUR")
+        XCTAssertEqual(CardSessionController.currencyCode(for: "9999"), "9999")
+    }
+
     // MARK: - Helpers
 
     private static func temporaryWalletURL() -> URL {

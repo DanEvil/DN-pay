@@ -95,5 +95,11 @@ struct KeychainStore {
         static let atc = "tsp.atc"
         static let keysExpireAt = "tsp.keysExpireAt"
         static let last4 = "card.last4"
+
+        /// Per-card session key: each saved card keeps its own key so
+        /// switching the primary card does not break the other one.
+        static func sessionKey(for tokenId: String) -> String {
+            "tsp.sessionKey.\(tokenId)"
+        }
     }
 }

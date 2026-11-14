@@ -16,6 +16,9 @@ struct RootView: View {
             PaymentView()
                 .tabItem { Label("Оплата", systemImage: "creditcard") }
 
+            WalletView()
+                .tabItem { Label("Кошелёк", systemImage: "wallet.pass") }
+
             HceView()
                 .tabItem { Label("NFC", systemImage: "wave.3.right") }
 
@@ -30,6 +33,14 @@ struct RootView: View {
 struct PaymentView: View {
     @EnvironmentObject private var payment: PaymentCoordinator
 
+    /// Tracks which field has the keyboard, so the dismiss button can be
+    /// wired to it.
+    @FocusState private var focusedField: PaymentField?
+
+    enum PaymentField: Hashable {
+        case pan, expiry, cvv
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -37,25 +48,43 @@ struct PaymentView: View {
                     TextField("Номер карты", text: $payment.pan)
                         .keyboardType(.numberPad)
                         .textContentType(.creditCardNumber)
+                        .focused($focusedField, equals: .pan)
                     TextField("Срок (ММ/ГГ)", text: $payment.expiry)
+                        .focused($focusedField, equals: .expiry)
                     SecureField("CVV", text: $payment.cvv)
                         .keyboardType(.numberPad)
+                        .focused($focusedField, equals: .cvv)
                     Text("Тестовая карта 2200123456789019 — mock TSP, никаких реальных списаний.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("Сумма") {
-                    TextField("Копейки", text: $payment.amountMinor)
-                        .keyboardType(.numberPad)
-                    TextField("Валюта", text: $payment.currency)
-                    if let amount = Int(payment.amountMinor) {
-                        Text("Итого: \(String(format: "%.2f", Double(amount) / 100)) \(payment.currency)")
+                    if let request = payment.pendingRequest {
+                        // The terminal owns the amount: it is read-only here.
+                        LabeledContent("Терминал требует", value: request.amountWithCurrency)
+                        Text("Сумму задаёт терминал, вручную изменить её нельзя.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Сумма появится, когда терминал начнёт операцию.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 Section {
+                    Button {
+                        Task { await payment.simulateTerminalTap() }
+                    } label: {
+                        HStack {
+                            Text("Терминал: приложить телефон")
+                            Spacer()
+                            if payment.isBusy { ProgressView() }
+                        }
+                    }
+                    .disabled(payment.isBusy)
+
                     Button {
                         Task { await payment.runTransaction() }
                     } label: {
@@ -65,7 +94,7 @@ struct PaymentView: View {
                             if payment.isBusy { ProgressView() }
                         }
                     }
-                    .disabled(payment.isBusy)
+                    .disabled(payment.isBusy || payment.pendingRequest == nil)
 
                     Button("Replay-тест (тот же ATC)") {
                         Task { await payment.runReplayAttack() }
@@ -92,11 +121,84 @@ struct PaymentView: View {
                 }
             }
             .navigationTitle("DN pay")
+            .toolbar {
+                // The checkmark above the keyboard dismisses it.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button {
+                        focusedField = nil
+                    } label: {
+                        Image(systemName: "checkmark")
+                    }
+                    .accessibilityLabel("Скрыть клавиатуру")
+                }
+            }
         }
     }
 }
 
-// MARK: - HCE
+
+// MARK: - Wallet
+
+struct WalletView: View {
+    @EnvironmentObject private var payment: PaymentCoordinator
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if payment.wallet.cards.isEmpty {
+                    Section {
+                        Text("В кошельке пока нет карт. Сохранённая карта появляется после первой успешной оплаты.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section("Карты") {
+                        ForEach(payment.wallet.cards) { card in
+                            Button {
+                                payment.selectPrimaryCard(id: card.id)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(card.brandName)
+                                            .font(.headline)
+                                            .foregroundStyle(.primary)
+                                        Text(card.maskedNumber)
+                                            .font(.subheadline.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                        Text("до \(card.expiry)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if card.id == payment.wallet.primaryCard?.id {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.tint)
+                                            .accessibilityLabel("Основная карта")
+                                    }
+                                }
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    payment.removeCard(id: card.id)
+                                } label: {
+                                    Label("Удалить", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+
+                    Section {
+                        Text("Нажмите на карту, чтобы сделать её основной. Основная карта используется по умолчанию при оплате.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Кошелёк")
+        }
+    }
+}
 
 // MARK: - HCE
 

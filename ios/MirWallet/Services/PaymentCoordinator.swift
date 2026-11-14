@@ -21,6 +21,7 @@ final class PaymentCoordinator: ObservableObject {
         case idle
         case checking
         case provisioning
+        case confirming
         case authorizing
         case approved
         case declined
@@ -31,6 +32,7 @@ final class PaymentCoordinator: ObservableObject {
             case .idle: return "Готов"
             case .checking: return "Проверка карты"
             case .provisioning: return "Выпуск токена"
+            case .confirming: return "Подтверждение"
             case .authorizing: return "Авторизация"
             case .approved: return "Оплата одобрена"
             case .declined: return "Отклонено"
@@ -54,9 +56,21 @@ final class PaymentCoordinator: ObservableObject {
     @Published var cvv: String = "123"
     @Published var expiry: String = "12/29"
 
+    /// The transaction request the terminal is waiting for, if any.
+    /// The amount in it is the terminal's, not the user's.
+    @Published private(set) var pendingRequest: TerminalRequest?
+
+    /// Saved cards and the primary one.
+    @Published private(set) var wallet: WalletStore
+
     private let tsp = TspClient.shared
     private let keychain = KeychainStore()
+    private let authenticator = BiometricAuthenticator()
+    private var terminal = MockTerminal()
     private var sessionKey: Data?
+
+    /// The card that will be used for the next transaction.
+    var activeCard: WalletCard? { wallet.primaryCard }
 
     var deviceUDID: String {
         UIDevice.current.identifierForVendor?.uuidString ?? "unknown-device"
@@ -72,6 +86,7 @@ final class PaymentCoordinator: ObservableObject {
     // MARK: - Lifecycle
 
     init() {
+        self.wallet = WalletStore()
         restoreSession()
     }
 
@@ -79,8 +94,10 @@ final class PaymentCoordinator: ObservableObject {
     /// transacting offline across launches.
     func restoreSession() {
         do {
-            sessionKey = try keychain.data(for: KeychainStore.Key.sessionKey)
             tokenId = try keychain.string(for: KeychainStore.Key.tokenId)
+            if let tokenId {
+                sessionKey = try keychain.data(for: KeychainStore.Key.sessionKey(for: tokenId))
+            }
             dpan = try keychain.string(for: KeychainStore.Key.dpan)
             last4 = try keychain.string(for: KeychainStore.Key.last4)
             if let atcString = try keychain.string(for: KeychainStore.Key.atc),
@@ -98,9 +115,12 @@ final class PaymentCoordinator: ObservableObject {
 
     /// Drops the provisioned session and its keys.
     func clearSession() {
-        for key in [KeychainStore.Key.sessionKey, KeychainStore.Key.tokenId,
+        var keys = [KeychainStore.Key.sessionKey, KeychainStore.Key.tokenId,
                     KeychainStore.Key.dpan, KeychainStore.Key.atc,
-                    KeychainStore.Key.keysExpireAt, KeychainStore.Key.last4] {
+                    KeychainStore.Key.keysExpireAt, KeychainStore.Key.last4]
+        // Every saved card has its own session key.
+        keys.append(contentsOf: wallet.cards.map { KeychainStore.Key.sessionKey(for: $0.tokenId) })
+        for key in keys {
             try? keychain.remove(key)
         }
         sessionKey = nil
@@ -112,6 +132,85 @@ final class PaymentCoordinator: ObservableObject {
         appendLog("Сессия очищена")
     }
 
+    // MARK: - Terminal
+
+    /// Simulates the customer tapping the phone on a terminal.
+    ///
+    /// The terminal produces the amount; the app must show it and sign it
+    /// as-is.
+    func simulateTerminalTap() async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        let request = terminal.nextRequest()
+        pendingRequest = request
+        amountMinor = request.amountMinor
+        currency = request.currency
+        appendLog("Терминал запросил оплату: \(request.amountWithCurrency)")
+    }
+
+    /// Cancels the pending terminal request.
+    func cancelTerminalRequest() {
+        pendingRequest = nil
+        appendLog("Запрос терминала отменён")
+    }
+
+    // MARK: - Wallet
+
+    /// Saves the provisioned card into the wallet.
+    private func saveToWallet(tokenId: String,
+                              dpan: String,
+                              last4: String,
+                              scheme: String,
+                              expiry: String) {
+        let card = WalletCard(tokenId: tokenId, dpan: dpan, last4: last4,
+                              scheme: scheme, expiry: expiry)
+        wallet.add(card)
+        appendLog("Карта ••••\(last4) сохранена в кошелёк")
+    }
+
+    /// Makes a saved card the primary one and loads its session key.
+    func selectPrimaryCard(id: String) {
+        guard let card = wallet.cards.first(where: { $0.id == id }) else { return }
+        wallet.setPrimary(id: id)
+
+        tokenId = card.tokenId
+        dpan = card.dpan
+        last4 = card.last4
+        if let key = try? keychain.data(for: KeychainStore.Key.sessionKey(for: card.tokenId)),
+           let key {
+            sessionKey = key
+            appendLog("Основная карта: ••••\(card.last4)")
+        } else {
+            sessionKey = nil
+            appendLog("Основная карта: ••••\(card.last4), нужна повторная привязка")
+        }
+    }
+
+    /// Removes a card from the wallet.
+    func removeCard(id: String) {
+        wallet.remove(id: id)
+        try? keychain.remove(KeychainStore.Key.sessionKey(for: id))
+        if tokenId == id {
+            tokenId = wallet.primaryCard?.tokenId
+            dpan = wallet.primaryCard?.dpan
+            last4 = wallet.primaryCard?.last4
+            sessionKey = nil
+        }
+        appendLog("Карта удалена из кошелька")
+    }
+
+    // MARK: - Biometrics
+
+    /// Asks the user to confirm the payment with Face ID or Touch ID.
+    private func confirmBiometrically(amount: String) async throws {
+        let method = BiometricAuthenticator.availableMethod()
+        let reason = "Оплата \(amount)"
+        let used = try await authenticator.confirm(reason: reason)
+        appendLog("Подтверждение: \(used == .none ? "пароль устройства" : used.rawValue)")
+    }
+
     // MARK: - Flow
 
     /// Runs a complete transaction.
@@ -121,6 +220,19 @@ final class PaymentCoordinator: ObservableObject {
         journal.removeAll()
         stage = .checking
         defer { isBusy = false }
+
+        // The terminal owns the amount. Without a terminal request there is
+        // nothing to authorise, so the transaction is refused rather than
+        // signed against a number the user typed.
+        guard let request = pendingRequest else {
+            stage = .failed
+            appendLog("Нет запроса от терминала — сумма должна приходить от него")
+            return
+        }
+
+        // The amount is taken from the terminal and cannot be edited.
+        amountMinor = request.amountMinor
+        currency = request.currency
 
         do {
             // 1. Check card
@@ -147,7 +259,7 @@ final class PaymentCoordinator: ObservableObject {
                 return
             }
             sessionKey = key
-            try? keychain.set(key, for: KeychainStore.Key.sessionKey)
+            try? keychain.set(key, for: KeychainStore.Key.sessionKey(for: provisioning.tokenId))
             try? keychain.setString(provisioning.tokenId, for: KeychainStore.Key.tokenId)
             try? keychain.setString(provisioning.dpan, for: KeychainStore.Key.dpan)
             try? keychain.setString(String(provisioning.atc), for: KeychainStore.Key.atc)
@@ -155,33 +267,43 @@ final class PaymentCoordinator: ObservableObject {
             appendLog("Токен выпущен: \(provisioning.tokenId), DPAN \(provisioning.dpan)")
             appendLog("Ключи действительны \(keysRemainingDescription)")
 
-            // 3. Authorize
+            // 3. Confirm with Face ID / Touch ID before signing anything.
+            stage = .confirming
+            try await confirmBiometrically(amount: request.amountWithCurrency)
+
+            // 4. Authorize
             stage = .authorizing
             atc += 1
             try? keychain.setString(String(atc), for: KeychainStore.Key.atc)
-            let un = EmvCrypto.randomBytes(count: 8)
+            let un = request.unpredictableNumber
             let arqc = EmvCrypto.computeARQC(
                 sessionKey: key,
                 atc: atc,
-                amountMinor: amountMinor,
-                currency: currency,
+                amountMinor: request.amountMinor,
+                currency: request.currency,
                 unpredictableNumber: un,
-                tvr: "0000000000",
-                transactionType: "00")
+                tvr: request.tvr,
+                transactionType: request.transactionType)
 
             let verification = try await tsp.verifyCryptogram(
                 tokenId: provisioning.tokenId,
                 atc: atc,
-                amountMinor: amountMinor,
-                currency: currency,
+                amountMinor: request.amountMinor,
+                currency: request.currency,
                 unpredictableNumber: un,
-                tvr: "0000000000",
-                transactionType: "00",
+                tvr: request.tvr,
+                transactionType: request.transactionType,
                 arqc: arqc)
 
             if verification.approved {
                 stage = .approved
+                pendingRequest = nil
                 appendLog("Криптограмма принята. ATC=\(atc), ARQC=\(arqc.hexString)")
+                saveToWallet(tokenId: provisioning.tokenId,
+                             dpan: provisioning.dpan,
+                             last4: check.last4 ?? "",
+                             scheme: check.scheme ?? "unknown",
+                             expiry: expiry)
             } else {
                 stage = .declined
                 appendLog("Отклонено: \(verification.reason ?? "unknown")")

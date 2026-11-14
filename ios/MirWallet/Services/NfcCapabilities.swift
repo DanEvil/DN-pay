@@ -99,6 +99,14 @@ enum NfcCapabilities {
         var hcePrefixes: Bool {
             keys.contains("com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes")
         }
+
+        /// Whether the app may be registered as the default contactless app.
+        ///
+        /// With this entitlement the system routes a terminal tap straight
+        /// to the app, so the customer never has to open it.
+        var hasDefaultContactlessApp: Bool {
+            keys.contains("com.apple.developer.nfc.hce.default-contactless-app")
+        }
     }
 
     /// Reads the entitlements from the embedded provisioning profile.
@@ -143,6 +151,7 @@ enum NfcCapabilities {
         var entitlementKeys: [String] = []
         var hasHCE: Bool = false
         var hasTagReading: Bool = false
+        var hasDefaultContactlessApp: Bool = false
     }
 
     /// Captures the current NFC state.
@@ -167,6 +176,7 @@ enum NfcCapabilities {
         snapshot.entitlementKeys = entitlements.keys.sorted()
         snapshot.hasHCE = entitlements.hasHCE
         snapshot.hasTagReading = entitlements.hasTagReading
+        snapshot.hasDefaultContactlessApp = entitlements.hasDefaultContactlessApp
 
         return snapshot
     }
